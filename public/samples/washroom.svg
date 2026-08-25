@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <defs>
+    <linearGradient id="wwall" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1b2b33"/><stop offset="60%" stop-color="#22343d"/><stop offset="100%" stop-color="#16232a"/>
+    </linearGradient>
+    <linearGradient id="wfloor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5a6f78"/><stop offset="100%" stop-color="#33444c"/>
+    </linearGradient>
+    <linearGradient id="bathw" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5fc4d8"/><stop offset="100%" stop-color="#2b8098"/>
+    </linearGradient>
+    <linearGradient id="mirror" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4e7080"/><stop offset="50%" stop-color="#37545f"/><stop offset="100%" stop-color="#2b444e"/>
+    </linearGradient>
+    <linearGradient id="curtain" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#b9d7de"/><stop offset="50%" stop-color="#8fbac5"/><stop offset="100%" stop-color="#6f9fac"/>
+    </linearGradient>
+    <linearGradient id="win" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1d3b52"/><stop offset="100%" stop-color="#2b5570"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#wwall)"/>
+
+  <!-- wall tile grid (decorative) -->
+  <g stroke="#2c414b" stroke-width="2" opacity="0.75">
+    <path d="M0 120H1280M0 200H1280M0 280H1280M0 360H1280M0 440H1280M0 520H1280M0 600H1280"/>
+    <path d="M80 100V650M240 100V650M400 100V650M560 100V650M720 100V650M880 100V650M1040 100V650M1200 100V650"/>
+  </g>
+
+  <!-- window behind the ledge (decorative) -->
+  <rect x="936" y="176" width="168" height="184" rx="4" fill="#16232a" stroke="#7d939b" stroke-width="7"/>
+  <rect x="948" y="188" width="144" height="160" fill="url(#win)"/>
+  <path d="M1020 188v160M948 268h144" stroke="#7d939b" stroke-width="6"/>
+
+  <!-- mirror above the sink (decorative) -->
+  <rect x="640" y="240" width="180" height="140" rx="6" fill="url(#mirror)" stroke="#93a9b1" stroke-width="6"/>
+  <path d="M652 356 l52 -56 l30 34 l38 -46 l36 68 z" fill="#43626e" opacity="0.7"/>
+
+  <!-- shower rail + curtain : climbable  x=1200 y=120 w=50 h=530 -->
+  <rect x="1140" y="112" width="140" height="10" rx="5" fill="#8fa5ad"/>
+  <rect x="1200" y="120" width="50" height="530" fill="url(#curtain)"/>
+  <g stroke="#5d8b98" stroke-width="2" opacity="0.6">
+    <path d="M1212 122V650M1224 122V650M1237 122V650"/>
+  </g>
+  <g fill="#c9d9de">
+    <circle cx="1206" cy="117" r="5"/><circle cx="1224" cy="117" r="5"/><circle cx="1242" cy="117" r="5"/>
+  </g>
+
+  <!-- floor : solid  y=650 -->
+  <rect x="0" y="650" width="1280" height="70" fill="url(#wfloor)"/>
+  <rect x="0" y="650" width="1280" height="5" fill="#8ba1a9"/>
+  <g stroke="#2b3a41" stroke-width="2" opacity="0.6">
+    <path d="M90 655V720M210 655V720M330 655V720M450 655V720M570 655V720M690 655V720M810 655V720M930 655V720M1050 655V720M1170 655V720"/>
+  </g>
+
+  <!-- bath : rims are solid at x=860..920 and x=1100..1160, water is the hazard between -->
+  <rect x="860" y="470" width="300" height="180" rx="16" fill="#eef3f5"/>
+  <rect x="920" y="500" width="180" height="150" rx="8" fill="#cfdde2"/>
+  <rect x="920" y="500" width="180" height="150" rx="8" fill="url(#bathw)"/>
+  <path d="M920 520 q22 -10 45 0 t45 0 t45 0 t45 0" stroke="#bff0fa" stroke-width="5" fill="none" opacity="0.85"/>
+  <path d="M948 492 q8 -16 0 -30 M984 488 q9 -18 1 -32 M1022 494 q7 -15 0 -27"
+        stroke="#cfe6ec" stroke-width="4" fill="none" opacity="0.5" stroke-linecap="round"/>
+  <rect x="860" y="470" width="60" height="12" rx="6" fill="#ffffff"/>
+  <rect x="1100" y="470" width="60" height="12" rx="6" fill="#ffffff"/>
+  <rect x="1146" y="524" width="26" height="10" rx="5" fill="#9fb4bb"/>
+
+  <!-- window ledge : solid  x=940 y=360 w=160 h=20 -->
+  <rect x="932" y="360" width="176" height="20" rx="4" fill="#d7e2e6"/>
+  <rect x="932" y="360" width="176" height="6" rx="3" fill="#f2f7f9"/>
+
+  <!-- vanity : solid  x=620 y=480 w=220 h=170 -->
+  <rect x="620" y="480" width="220" height="22" rx="5" fill="#d7e2e6"/>
+  <rect x="620" y="480" width="220" height="6" rx="3" fill="#f2f7f9"/>
+  <rect x="628" y="502" width="204" height="148" rx="6" fill="#3d5a66"/>
+  <rect x="640" y="518" width="86" height="118" rx="4" fill="#476878"/>
+  <rect x="734" y="518" width="86" height="118" rx="4" fill="#476878"/>
+  <ellipse cx="730" cy="492" rx="52" ry="9" fill="#b9ccd3"/>
+  <path d="M638 480 v-42 h10 v34 h22" stroke="#9fb4bb" stroke-width="7" fill="none" stroke-linecap="round"/>
+
+  <!-- toilet : solid  x=420 y=540 w=150 h=110 -->
+  <rect x="420" y="540" width="82" height="82" rx="6" fill="#eef3f5"/>
+  <rect x="420" y="540" width="82" height="10" rx="5" fill="#ffffff"/>
+  <rect x="498" y="540" width="72" height="34" rx="10" fill="#eef3f5"/>
+  <rect x="498" y="540" width="72" height="8" rx="4" fill="#ffffff"/>
+  <path d="M508 574 h54 l-8 54 h-38 z" fill="#dbe6ea"/>
+  <rect x="486" y="628" width="76" height="22" rx="5" fill="#e4edf0"/>
+
+  <!-- towel rail : solid  x=180 y=400 w=160 h=20  (towel hangs BELOW the rail) -->
+  <rect x="180" y="400" width="160" height="12" rx="6" fill="#9fb4bb"/>
+  <rect x="204" y="412" width="112" height="118" rx="6" fill="#e8b9a8"/>
+  <rect x="204" y="412" width="112" height="10" rx="5" fill="#f3cdbe"/>
+  <path d="M204 470 h112" stroke="#d5a292" stroke-width="4"/>
+
+  <!-- bath mat : bouncy  x=120 y=620 w=180 h=30 -->
+  <rect x="120" y="620" width="180" height="30" rx="12" fill="#7a5cc4"/>
+  <rect x="128" y="626" width="164" height="14" rx="7" fill="#8d6ede"/>
+
+  <!-- wet tiles : slippery  x=310 y=630 w=100 h=20 -->
+  <path d="M310 650 q10 -22 50 -20 q42 2 50 20 z" fill="#8fd6e8" opacity="0.85"/>
+  <ellipse cx="344" cy="641" rx="14" ry="4" fill="#d6f2f8" opacity="0.8"/>
+
+  <!-- collectibles -->
+  <rect x="700" y="443" width="30" height="22" rx="7" fill="#f5e6a8" stroke="#cbb367" stroke-width="3"/>
+  <g>
+    <ellipse cx="1007" cy="452" rx="17" ry="13" fill="#f5d049"/>
+    <circle cx="1000" cy="438" r="10" fill="#f5d049"/>
+    <circle cx="996" cy="436" r="2" fill="#20303a"/>
+    <path d="M989 439 l-9 3 l9 4 z" fill="#f08a3c"/>
+  </g>
+  <circle cx="215" cy="555" r="15" fill="#f5d049" stroke="#c9a11f" stroke-width="3"/>
+</svg>
