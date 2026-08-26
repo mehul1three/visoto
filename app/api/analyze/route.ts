@@ -19,12 +19,24 @@ export const maxDuration = 60;
  * surfacing a failure the viewer will read as "the project is broken".
  */
 const PRIMARY = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
-const MODEL_CHAIN = [PRIMARY, "gemini-2.5-flash"].filter(
+/**
+ * Fallbacks are verified against this endpoint, not merely listed by the API.
+ * `models.list()` advertises models that `generateContent` will not serve, and
+ * `gemini-2.5-flash` — the previous fallback — is retired for new keys and
+ * answers every request with a 404. A fallback that cannot run is worse than no
+ * fallback: it converts a passing retry into a hard failure.
+ */
+const MODEL_CHAIN = [PRIMARY, "gemini-3.6-flash", "gemini-3.5-flash-lite"].filter(
   (m, i, all) => all.indexOf(m) === i,
 );
 
-/** Statuses worth trying the next model for; anything else is a real error. */
-const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+/**
+ * Statuses no other model can rescue: a rejected key, a malformed request or an
+ * oversized image will fail identically everywhere, so stop immediately.
+ * Everything else — including a 404 from a retired model — is worth trying the
+ * next one for.
+ */
+const FATAL = new Set([400, 401, 403, 413]);
 
 const SYSTEM = `You convert a photograph of a real place into a playable 2D platformer level.
 
@@ -165,6 +177,8 @@ export async function POST(req: NextRequest) {
   let text: string | undefined;
   let used = "";
   let lastError: unknown;
+  /** Which model produced lastError, so failures name the right one. */
+  let failedModel = PRIMARY;
 
   try {
     for (const model of MODEL_CHAIN) {
@@ -202,19 +216,28 @@ export async function POST(req: NextRequest) {
         lastError = new Error("The model returned an empty response.");
       } catch (err) {
         lastError = err;
+        failedModel = model;
         const status = statusOf(err);
-        // A real error (bad key, bad schema) will not be fixed by another model.
-        if (status !== undefined && !TRANSIENT.has(status)) throw err;
+        if (status !== undefined && FATAL.has(status)) throw err;
       }
     }
 
     if (!text) {
       const status = statusOf(lastError);
-      if (status && TRANSIENT.has(status)) {
+      if (status === 404) {
+        return NextResponse.json(
+          {
+            error: "bad_model",
+            message: `"${failedModel}" is unavailable: ${detailOf(lastError)} Set GEMINI_MODEL to a model your key can reach.`,
+          },
+          { status: 502 },
+        );
+      }
+      if (status && status >= 500) {
         return NextResponse.json(
           {
             error: "overloaded",
-            message: `Every model in the chain was busy (${MODEL_CHAIN.join(", ")}). This is usually temporary — try again in a moment.`,
+            message: `Every model was busy (${MODEL_CHAIN.join(", ")}). This is usually temporary — try again in a moment.`,
           },
           { status: 503 },
         );
@@ -281,7 +304,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error: "bad_model",
-          message: `The model "${PRIMARY}" was not found. Set GEMINI_MODEL to one your key can reach.`,
+          message: `"${failedModel}" is unavailable: ${detail} Set GEMINI_MODEL to a model your key can reach.`,
         },
         { status: 502 },
       );
