@@ -23,7 +23,16 @@ export interface Progress {
 
 export const CLEAR_BONUS = 2;
 
-const KEY = "playground.progress.v1";
+const KEY = "visoto.progress.v1";
+/**
+ * The key this data lived under before the rename.
+ *
+ * Read once and carried across, because a product rename must not cost anyone
+ * their coins — and the characters they unlocked are priced high enough that
+ * losing the balance would be the difference between owning Slime and starting
+ * over.
+ */
+const LEGACY_KEY = "playground.progress.v1";
 
 export function emptyProgress(): Progress {
   return { coins: 0, banked: [], cleared: [] };
@@ -32,7 +41,8 @@ export function emptyProgress(): Progress {
 export function loadProgress(): Progress {
   if (typeof window === "undefined") return emptyProgress();
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw =
+      window.localStorage.getItem(KEY) ?? window.localStorage.getItem(LEGACY_KEY);
     if (!raw) return emptyProgress();
     const p = JSON.parse(raw) as Partial<Progress>;
     return {

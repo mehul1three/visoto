@@ -10,9 +10,16 @@
  */
 
 import { SAMPLES } from "../lib/samples";
-import { solve } from "../lib/solver";
-import { MONSTER_H, PLAYER_H, PLAYER_W, World } from "../lib/physics";
-import { WORLD_W, type Level } from "../lib/level";
+import { jumpReach, solve } from "../lib/solver";
+import {
+  JUMP_HEIGHT,
+  MONSTER_H,
+  PLAYER_H,
+  PLAYER_W,
+  World,
+  type StepEvent,
+} from "../lib/physics";
+import { MATERIAL_SPECS, WORLD_W, toWorld, type Level } from "../lib/level";
 import { normalise } from "../lib/normalise";
 import { buildBonusWorld } from "../lib/bonus";
 
@@ -196,20 +203,25 @@ console.log("\nmechanics");
     w.player.x = pipe.x + pipe.w / 2 - PLAYER_W / 2;
     w.player.y = pipe.y - PLAYER_H;
 
-    // Settle onto the pipe first: entry requires being grounded.
-    for (let i = 0; i < 20; i++) w.step(NONE, 1000 / 120);
-    checks.push(["stands on the pipe", w.player.grounded]);
+    // Falling onto the pipe is enough — no key, no press.
+    let entered: StepEvent | undefined;
+    for (let i = 0; i < 40 && !entered; i++) {
+      entered = w.step(NONE, 1000 / 120).find((e) => e.type === "tunnel");
+    }
+    checks.push(["landing on a pipe enters it", Boolean(entered)]);
+    checks.push(["reports which pipe", entered?.id === pipe.entity.id]);
 
-    const evs = w.step({ ...NONE, down: true }, 1000 / 120);
-    const ev = evs.find((e) => e.type === "tunnel");
-    checks.push(["down enters the tunnel", Boolean(ev)]);
-    checks.push(["reports which pipe", ev?.id === pipe.entity.id]);
+    // ...but only on arrival. Standing on one must not fire again, or coming
+    // back out of a chamber drops you straight back into it forever.
+    const again = w.step(NONE, 1000 / 120).some((e) => e.type === "tunnel");
+    checks.push(["standing on it does not re-fire", !again]);
 
-    // Mid-air presses must not warp the player.
+    // Mid-air over a pipe is not standing on it.
     const w2 = new World(level);
-    w2.player.y -= 200;
-    const air = w2.step({ ...NONE, down: true }, 1000 / 120);
-    checks.push(["airborne down does nothing", !air.some((e) => e.type === "tunnel")]);
+    w2.player.x = pipe.x + pipe.w / 2 - PLAYER_W / 2;
+    w2.player.y = pipe.y - PLAYER_H - 220;
+    const air = w2.step(NONE, 1000 / 120);
+    checks.push(["airborne over a pipe does nothing", !air.some((e) => e.type === "tunnel")]);
   }
 
   // --- bonus world ----------------------------------------------------
@@ -220,17 +232,101 @@ console.log("\nmechanics");
       "bonus room is deterministic",
       JSON.stringify(a.entities) === JSON.stringify(b.entities),
     ]);
+    // The layout is deliberately identical; what must differ is the level id,
+    // because that is what scopes the coin ledger. Two pipes sharing an id
+    // would mean the second chamber you visit pays nothing.
     checks.push([
-      "different pipes give different rooms",
-      JSON.stringify(buildBonusWorld("desk", "other").level.entities) !==
-        JSON.stringify(a.entities),
+      "different pipes are separately paid",
+      buildBonusWorld("desk", "other").level.id !== a.id &&
+        buildBonusWorld("living", "pipe").level.id !== a.id,
     ]);
     const bw = new World(a);
-    checks.push(["bonus room has coins", bw.totalCollectible >= 5]);
+    checks.push(["bonus room is well paid", bw.totalCollectible >= 15]);
     checks.push([
       "bonus room has a way out",
       a.entities.some((e) => e.material === "tunnel"),
     ]);
+
+    /**
+     * The chamber has to be climbable.
+     *
+     * Bonus rooms never pass through solve(), so nothing else would notice an
+     * impossible climb. A random bot is the wrong instrument here — the room is
+     * meant to be hard, so a bot failing proves nothing either way. Instead
+     * every consecutive step of the intended route is measured against the
+     * real jump arc.
+     */
+    const climb = ["bfloor", "bl0", "bl1", "bl2", "bl3", "bl4", "bl5"];
+    const rectOf = (id: string) => {
+      const e = a.entities.find((x) => x.id === id)!;
+      return toWorld(e.box);
+    };
+    let climbOk = true;
+    for (let i = 0; i < climb.length - 1; i++) {
+      const from = rectOf(climb[i]);
+      const to = rectOf(climb[i + 1]);
+      const rise = from.y - to.y;
+      const gap =
+        from.x + from.w >= to.x && to.x + to.w >= from.x
+          ? 0
+          : from.x + from.w < to.x
+            ? to.x - (from.x + from.w)
+            : from.x - (to.x + to.w);
+      const reach = jumpReach(rise);
+      if (rise > JUMP_HEIGHT * 0.85 || reach < 0 || gap > reach * 0.85) {
+        console.log(
+          `      ${climb[i]} -> ${climb[i + 1]}: rise ${rise.toFixed(0)} gap ${gap.toFixed(0)} reach ${reach.toFixed(0)}`,
+        );
+        climbOk = false;
+      }
+    }
+    checks.push(["every step of the climb is inside a jump", climbOk]);
+
+    /**
+     * Every standable thing needs room to stand.
+     *
+     * The climb test above measured the ledges and passed while the exit pipe
+     * was unusable — its lip left 30px of clearance under the ceiling for a
+     * 46px player, so the one surface that mattered was the one nothing
+     * checked. A platform you cannot occupy is not a platform, and the failure
+     * is invisible until someone walks up to it.
+     */
+    const solidRects = a.entities
+      .filter((e) => MATERIAL_SPECS[e.material].solid)
+      .map((e) => ({ id: e.id, r: toWorld(e.box) }));
+    let headroomOk = true;
+    for (const { id, r } of solidRects) {
+      if (id === "bceil" || id === "bleft" || id === "bright") continue;
+      // Scan along the surface: somewhere to stand is enough. Sampling only
+      // the centre flags a ledge with a pipe sitting on its middle, which is
+      // fine to walk around.
+      let anyRoom = false;
+      for (let x = r.x + PLAYER_W / 2; x <= r.x + r.w - PLAYER_W / 2; x += 12) {
+        const stand = {
+          x: x - PLAYER_W / 2,
+          y: r.y - PLAYER_H,
+          w: PLAYER_W,
+          h: PLAYER_H,
+        };
+        const hit = solidRects.some(
+          ({ id: other, r: o }) =>
+            other !== id &&
+            stand.x < o.x + o.w &&
+            stand.x + stand.w > o.x &&
+            stand.y < o.y + o.h &&
+            stand.y + stand.h > o.y,
+        );
+        if (!hit) {
+          anyRoom = true;
+          break;
+        }
+      }
+      if (!anyRoom) {
+        console.log(`      "${id}" has no room to stand on it`);
+        headroomOk = false;
+      }
+    }
+    checks.push(["every surface has room to stand on", headroomOk]);
   }
 
   // --- stomp versus death ---------------------------------------------
@@ -311,6 +407,139 @@ console.log("\ncoordinate conversion");
     console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
     if (!ok) failures++;
   }
+}
+
+
+/**
+ * Randomised model output.
+ *
+ * The hand-written adversarial cases below were chosen by me, which means they
+ * test the failures I already thought of. Real photographs produce shapes I did
+ * not think of — that is how a spawn-adjacent goal, an unreachable goal and a
+ * walk-in-a-straight-line level all shipped at once.
+ *
+ * So: many random levels, each asserted on the three properties that make a
+ * level worth playing at all — the goal is reachable, the route is more than a
+ * couple of jumps, and it crosses a decent part of the frame.
+ */
+function mulberry(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a += 0x6d2b79f5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const MATERIAL_MIX: Array<Level["entities"][number]["material"]> = [
+  "solid", "solid", "solid", "solid", "solid", "solid",
+  "bouncy", "hazard", "slippery", "crumbling",
+];
+
+function randomLevel(seed: number): Level {
+  const rand = mulberry(seed);
+  const count = 5 + Math.floor(rand() * 10);
+  const entities: Level["entities"] = [];
+  for (let i = 0; i < count; i++) {
+    const w = 0.05 + rand() * 0.22;
+    const h = 0.02 + rand() * 0.13;
+    entities.push({
+      id: `e${i}`,
+      label: `object ${i}`,
+      material: MATERIAL_MIX[Math.floor(rand() * MATERIAL_MIX.length)],
+      reason: "randomised",
+      box: { x: rand() * (1 - w), y: 0.12 + rand() * (0.84 - h), w, h },
+    });
+  }
+  return {
+    version: 1,
+    title: `Random ${seed}`,
+    tagline: "generated",
+    entities,
+    spawn: { x: rand(), y: rand() },
+    goal: { x: rand(), y: rand() },
+  };
+}
+
+console.log("\nrandomised model output (60 levels)");
+{
+  const N = 60;
+  let unreachable = 0;
+  let tooShort = 0;
+  let tooNarrow = 0;
+  let botFailed = 0;
+  let unusablePipes = 0;
+  const hopList: number[] = [];
+
+  for (let seed = 1; seed <= N; seed++) {
+    const { level, report } = solve(randomLevel(seed));
+    hopList.push(report.hops);
+
+    if (report.hops === 0) {
+      unreachable++;
+      console.log(`FAIL  seed ${seed}: goal not reachable from spawn`);
+      continue;
+    }
+    if (report.hops < 2) tooShort++;
+    if (report.span < 0.3) tooNarrow++;
+
+    // Anything the player is meant to stand on must have room to stand on it —
+    // pipes especially, since an unusable pipe is a dead end that looks like a
+    // feature.
+    const rects = level.entities
+      .filter((e) => MATERIAL_SPECS[e.material].solid)
+      .map((e) => ({ e, r: toWorld(e.box) }));
+    for (const { e, r } of rects) {
+      if (e.material !== "tunnel") continue;
+      const lip = {
+        x: r.x,
+        y: r.y - PLAYER_H - 4,
+        w: r.w,
+        h: PLAYER_H + 4,
+      };
+      const blocked = rects.some(
+        ({ e: o, r: q }) =>
+          o.id !== e.id &&
+          lip.x < q.x + q.w &&
+          lip.x + lip.w > q.x &&
+          lip.y < q.y + q.h &&
+          lip.y + lip.h > q.y,
+      );
+      if (blocked) {
+        unusablePipes++;
+        console.log(`FAIL  seed ${seed}: pipe "${e.id}" has no room to stand on`);
+      }
+    }
+
+    // Empirical check on a sample, using the same bot the rest of the harness
+    // uses. A weaker ad-hoc bot would make solver bugs and bot weakness
+    // indistinguishable, which is worse than not testing it.
+    if (seed % 6 === 0) {
+      let won = false;
+      for (let i = 0; i < 300 && !won; i++) {
+        won = trial(level, seed * 7919 + i).won;
+      }
+      if (!won) {
+        botFailed++;
+        console.log(
+          `FAIL  seed ${seed}: solver says ${report.hops} hops, no bot finished in 300 trials`,
+        );
+      }
+    }
+  }
+
+  hopList.sort((a, b) => a - b);
+  const median = hopList[Math.floor(hopList.length / 2)];
+  console.log(
+    `      hops: min ${hopList[0]}  median ${median}  max ${hopList[hopList.length - 1]}`,
+  );
+  const problems = unreachable + tooShort + tooNarrow + botFailed + unusablePipes;
+  console.log(
+    `${problems === 0 ? "PASS" : "FAIL"}  unreachable ${unreachable}  trivial(<2 hops) ${tooShort}  narrow(<30% span) ${tooNarrow}  bot-failed ${botFailed}  unusable-pipes ${unusablePipes}`,
+  );
+  failures += problems;
 }
 
 /**

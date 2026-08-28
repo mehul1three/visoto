@@ -118,9 +118,10 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: prepared.dataUrl }),
-        // The route caps itself at 60s; give it a little room, then give up
-        // rather than leaving the scan animation running forever.
-        signal: AbortSignal.timeout(75_000),
+        // Just above the route's own 42s chain budget, so the server always
+        // gets to return its explanation rather than the client cutting it off
+        // and reporting a timeout the server never saw.
+        signal: AbortSignal.timeout(52_000),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -137,7 +138,7 @@ export default function Page() {
       const err = e as Error;
       setError(
         err.name === "TimeoutError" || err.name === "AbortError"
-          ? "The analysis took too long and was cancelled. Try again, or use a simpler photo."
+          ? "The analysis timed out before the server answered. It is usually busy rather than broken — try again in a moment."
           : err.message,
       );
       setPendingImage(null);
@@ -200,7 +201,7 @@ export default function Page() {
         <header className="mb-8">
           <div className="flex items-baseline gap-3">
             <h1 className="text-2xl font-semibold tracking-tight text-white">
-              Playground
+              Visoto
             </h1>
             <p className="text-sm text-neutral-500">your room is the level</p>
           </div>

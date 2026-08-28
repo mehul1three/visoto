@@ -31,7 +31,9 @@ export interface Settings {
 /** The subset rendered as on/off switches. */
 export type ToggleKey = "sound" | "particles" | "shake" | "labels";
 
-const KEY = "playground.settings.v3";
+const KEY = "visoto.settings.v3";
+/** Pre-rename key, read once so preferences survive the change of name. */
+const LEGACY_KEY = "playground.settings.v3";
 
 export function defaultSettings(): Settings {
   const reduced =
@@ -52,7 +54,8 @@ export function loadSettings(): Settings {
   const base = defaultSettings();
   if (typeof window === "undefined") return base;
   try {
-    const raw = window.localStorage.getItem(KEY);
+    const raw =
+      window.localStorage.getItem(KEY) ?? window.localStorage.getItem(LEGACY_KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw) as Partial<Settings>;
     const bool = (v: unknown, fallback: boolean) =>

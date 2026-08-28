@@ -99,7 +99,8 @@ export class Renderer3D implements Renderer {
     });
     this.renderer.setClearColor(0x05070d, 1);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoft was deprecated in r18x and silently downgrades to PCF anyway.
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Frame the 1280x720 plane exactly, so world coordinates and screen
@@ -600,10 +601,32 @@ export class Renderer3D implements Renderer {
     this.particleGeom.attributes.color.needsUpdate = true;
 
     // Camera: a little parallax toward the player, plus screen shake.
+    const halfHView =
+      Math.tan((this.camera.fov / 2) * (Math.PI / 180)) * this.camera.position.z;
+
     const targetX = WORLD_W / 2 + (p.x - WORLD_W / 2) * 0.05;
-    const targetY = flipY(WORLD_H / 2 + (p.y - WORLD_H / 2) * 0.03);
+
+    /**
+     * Vertical follow, upward only.
+     *
+     * The level is framed to fit exactly, so at rest the camera should not move
+     * — panning would just reveal dead space around the photo. But the player
+     * can stand on the highest platform and still jump 140 units higher, which
+     * puts them above the top of the world and off the screen entirely.
+     *
+     * So the camera holds its resting height until the player would leave the
+     * frame, and only then rises to keep them in view. It never pans down:
+     * there is nothing below the world worth showing.
+     */
+    const restY = flipY(WORLD_H / 2);
+    const playerY = flipY(p.y + PLAYER_H / 2);
+    const needed = playerY - halfHView + PLAYER_H * 2.2;
+    const targetY = Math.max(restY, needed);
+
     this.camera.position.x += (targetX - this.camera.position.x) * 0.08;
-    this.camera.position.y += (targetY - this.camera.position.y) * 0.08;
+    // Rise quickly so a fast jump is never lost; settle back gently.
+    const vLerp = targetY > this.camera.position.y ? 0.22 : 0.06;
+    this.camera.position.y += (targetY - this.camera.position.y) * vLerp;
     if (opts.shake > 0) {
       this.camera.position.x += (Math.random() - 0.5) * opts.shake;
       this.camera.position.y += (Math.random() - 0.5) * opts.shake;
@@ -611,17 +634,18 @@ export class Renderer3D implements Renderer {
     // Hard stop at the margin: parallax and shake are additive and would
     // otherwise combine, on exactly the frames with the most going on, to pull
     // the edge of the level into view.
-    const halfH = Math.tan((this.camera.fov / 2) * (Math.PI / 180)) * this.camera.position.z;
-    const halfW = halfH * this.camera.aspect;
+    const halfW = halfHView * this.camera.aspect;
     const slackX = Math.max(0, halfW - WORLD_W / 2);
-    const slackY = Math.max(0, halfH - WORLD_H / 2);
     this.camera.position.x = Math.max(
       WORLD_W / 2 - slackX,
       Math.min(WORLD_W / 2 + slackX, this.camera.position.x),
     );
+    // Only the lower bound is clamped. The upper bound is what the follow above
+    // exists to exceed, so clamping both is what made the player vanish.
+    const slackY = Math.max(0, halfHView - WORLD_H / 2);
     this.camera.position.y = Math.max(
       flipY(WORLD_H / 2) - slackY,
-      Math.min(flipY(WORLD_H / 2) + slackY, this.camera.position.y),
+      this.camera.position.y,
     );
     // Look straight ahead. Aiming the camera at the player tilts the frustum
     // and reintroduces exactly the edge-cropping the clamp just prevented.

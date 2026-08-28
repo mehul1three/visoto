@@ -97,6 +97,8 @@ export interface StepEvent {
   y?: number;
   /** Which collectible, so progress can pay each coin exactly once. */
   id?: string;
+  /** What killed the player, so the retry screen can say so. */
+  cause?: string;
 }
 
 function overlaps(a: Rect, b: Rect): boolean {
@@ -112,6 +114,15 @@ export class World {
   goal: Rect;
   spawn: { x: number; y: number };
   monsters: Monster[] = [];
+  /**
+   * The pipe the player is currently standing on.
+   *
+   * Entry is edge-triggered off this: a pipe fires when the player *arrives* on
+   * it, never while they remain there. Without that, returning from a chamber
+   * drops you back onto the pipe you came out of and you fall straight back in,
+   * forever.
+   */
+  standingOnTunnel: string | null = null;
   collected = 0;
   totalCollectible = 0;
   deaths = 0;
@@ -167,6 +178,7 @@ export class World {
 
   reset(full = false) {
     this.player = this.freshPlayer();
+    this.standingOnTunnel = null;
     // Always revive the patrol. Leaving a stomped monster dead after the player
     // dies would let you clear a level by trading lives for enemies, and
     // leaving a live one mid-lunge can kill you again the instant you respawn.
@@ -190,6 +202,19 @@ export class World {
         b.respawnAt = undefined;
       }
     }
+  }
+
+  /**
+   * Restart the run: clock, coins and collapsed platforms back to the start.
+   *
+   * Deliberately keeps the fall count. It is the one number that should survive
+   * a retry — it says how many attempts this has taken, which is exactly what a
+   * player wants to know and what a fresh zero would hide.
+   */
+  restartRun() {
+    const falls = this.deaths;
+    this.reset(true);
+    this.deaths = falls;
   }
 
   /** Advances one fixed tick. Returns events for the renderer/audio to react to. */
@@ -396,32 +421,42 @@ export class World {
         events.push({ type: "stomp", x: m.x + m.w / 2, y: m.y });
       } else {
         this.deaths++;
-        events.push({ type: "death", x: p.x, y: p.y });
+        events.push({ type: "death", x: p.x, y: p.y, cause: "monster" });
         this.reset(false);
         return events;
       }
     }
 
     // --- tunnels ----------------------------------------------------------
-    if (input.down && p.grounded) {
-      const under = this.bodies.find(
-        (b) =>
-          b.entity.material === "tunnel" &&
-          overlaps({ x: p.x, y: p.y + PLAYER_H, w: PLAYER_W, h: 4 }, b),
-      );
-      if (under) {
-        events.push({ type: "tunnel", id: under.entity.id, x: p.x, y: p.y });
-        return events;
-      }
+    // Walking onto a pipe is enough; there is no key to press. A pipe you can
+    // stand on top of without falling in is a pipe players walk past.
+    const under = p.grounded
+      ? this.bodies.find(
+          (b) =>
+            b.entity.material === "tunnel" &&
+            overlaps({ x: p.x, y: p.y + PLAYER_H, w: PLAYER_W, h: 4 }, b),
+        )
+      : undefined;
+    const nowOn = under ? under.entity.id : null;
+    const arrived = nowOn !== null && nowOn !== this.standingOnTunnel;
+    this.standingOnTunnel = nowOn;
+    if (arrived) {
+      events.push({ type: "tunnel", id: nowOn, x: p.x, y: p.y });
+      return events;
     }
 
     // --- hazards + the floor of the world -------------------------------
-    const hitHazard = this.bodies.some(
+    const hazard = this.bodies.find(
       (b) => b.entity.material === "hazard" && overlaps(rect, b),
     );
-    if (hitHazard || p.y > WORLD_H + 80) {
+    if (hazard || p.y > WORLD_H + 80) {
       this.deaths++;
-      events.push({ type: "death", x: p.x, y: p.y });
+      events.push({
+        type: "death",
+        x: p.x,
+        y: p.y,
+        cause: hazard ? hazard.entity.label : "fell",
+      });
       this.reset(false);
       return events;
     }

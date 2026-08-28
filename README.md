@@ -1,4 +1,4 @@
-# Playground
+# Visoto
 
 **Your room is the level.**
 
@@ -16,7 +16,7 @@ Most "AI makes a game" demos detect rectangles and make them all solid. That
 produces a level built from your photo, but not a level built from your *room* —
 every object behaves identically, so the photo is wallpaper.
 
-Playground assigns physics from **what an object is**, not what it looks like:
+Visoto assigns physics from **what an object is**, not what it looks like:
 
 | Object | Material | Why |
 |---|---|---|
@@ -109,6 +109,12 @@ than model-generated, so its geometry is exact, and each is still run through
 `solve()` on load like any uploaded photo. They are illustrations, not
 photographs, and the UI says so rather than implying the model produced them.
 
+Characters unlock with coins: nine sit on every level plus two for clearing it,
+and five more wait down each pipe. Fully finishing the three built-in scenes
+reaches the first three characters; the last two are priced beyond what the
+demo scenes can pay, because a fresh photograph is worth about sixteen coins and
+pointing the camera at something new is the behaviour worth rewarding.
+
 Six characters — Blob, Bean, Spook, Unit, Cat, Slime — in eight colours, all
 drawn procedurally, so no sprite sheets ship and a new character costs one
 function. The picker in Settings previews each one using the very same
@@ -141,7 +147,7 @@ with a video, and one keypress should be enough to show it isn't.
 
 A level that only runs on this website is a demo. Every level exports to:
 
-- **Playground JSON** — the native format, documented in `lib/level.ts`
+- **Visoto JSON** — the native format, documented in `lib/level.ts`
 - **Godot 4** `.tscn` — static bodies grouped by material, with label/reason/
   material preserved as node metadata
 - **Phaser / Tiled** — an object layer with materials as object properties

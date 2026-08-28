@@ -1,5 +1,5 @@
 /**
- * Playground level format v1.
+ * Visoto level format v1.
  *
  * This is the contract between the vision model, the physics engine, and the
  * exporters. Coordinates are NORMALISED (0..1, top-left origin) so a level

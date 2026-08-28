@@ -38,6 +38,21 @@ const MODEL_CHAIN = [PRIMARY, "gemini-3.6-flash", "gemini-3.5-flash-lite"].filte
  */
 const FATAL = new Set([400, 401, 403, 413]);
 
+/**
+ * One budget for the whole attempt chain, not one per model.
+ *
+ * Each attempt used to get its own 50s abort, so three models could spend 150s
+ * between them — against a 60s route limit and a 75s client timeout. The client
+ * gave up long before the server did, and the user saw "took too long" while
+ * the request was still running happily on model two.
+ *
+ * The budget is now shared: every attempt gets whatever is left, and once too
+ * little remains to be worth starting, the chain stops and says so.
+ */
+const TOTAL_BUDGET_MS = 42_000;
+/** Below this there is no point starting another model. */
+const MIN_ATTEMPT_MS = 8_000;
+
 const SYSTEM = `You convert a photograph of a real place into a playable 2D platformer level.
 
 COORDINATES
@@ -174,6 +189,8 @@ export async function POST(req: NextRequest) {
 
   const client = new GoogleGenAI({ apiKey });
 
+  const startedAt = Date.now();
+  let ranOutOfTime = false;
   let text: string | undefined;
   let used = "";
   let lastError: unknown;
@@ -182,6 +199,11 @@ export async function POST(req: NextRequest) {
 
   try {
     for (const model of MODEL_CHAIN) {
+      const remaining = TOTAL_BUDGET_MS - (Date.now() - startedAt);
+      if (remaining < MIN_ATTEMPT_MS) {
+        ranOutOfTime = true;
+        break;
+      }
       try {
         const response = await client.models.generateContent({
           model,
@@ -189,7 +211,12 @@ export async function POST(req: NextRequest) {
             systemInstruction: SYSTEM,
             responseMimeType: "application/json",
             responseSchema: LEVEL_JSON_SCHEMA,
-            abortSignal: AbortSignal.timeout(50_000),
+            abortSignal: AbortSignal.timeout(remaining),
+            // Finding boxes and naming materials is perception, not reasoning.
+            // Gemini 3.x thinks by default, which on this workload buys nothing
+            // and costs most of the wall-clock the user spends staring at a
+            // progress bar.
+            thinkingConfig: { thinkingBudget: 0 },
           },
           contents: [
             {
@@ -223,6 +250,16 @@ export async function POST(req: NextRequest) {
     }
 
     if (!text) {
+      if (ranOutOfTime || String((lastError as Error)?.name) === "TimeoutError") {
+        return NextResponse.json(
+          {
+            error: "slow",
+            message:
+              "The model did not answer in time. It is usually busy rather than broken — try again in a moment.",
+          },
+          { status: 504 },
+        );
+      }
       const status = statusOf(lastError);
       if (status === 404) {
         return NextResponse.json(

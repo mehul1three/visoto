@@ -35,6 +35,7 @@ import {
   BOUNCE_MULT,
   GRAVITY,
   JUMP_HEIGHT,
+  JUMP_RANGE,
   JUMP_V,
   MOVE_SPEED,
   PLAYER_H,
@@ -51,6 +52,10 @@ export interface SolveReport {
   ok: boolean;
   repairs: string[];
   surfaces: number;
+  /** Jumps along the shortest route from spawn to goal. The difficulty dial. */
+  hops: number;
+  /** Horizontal distance from spawn to goal, as a fraction of the frame. */
+  span: number;
   /** Fraction of surfaces the player can actually get to. Shown in the UI. */
   coverage: number;
 }
@@ -328,6 +333,34 @@ function chooseSpawn(
   };
 }
 
+/**
+ * Hop count from the spawn surface to every reachable surface.
+ *
+ * Reachability alone says a level is winnable; it says nothing about whether it
+ * is worth playing. The hop count is what distinguishes "the goal is eight
+ * jumps away, over the hazard and up the shelves" from "the goal is four paces
+ * to your right", and it is the number goal placement is chosen to maximise.
+ */
+export function reachableDepths(
+  surfaces: Surface[],
+  startIdx: number,
+): Map<number, number> {
+  const depth = new Map<number, number>([[startIdx, 0]]);
+  const queue = [startIdx];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const d = depth.get(cur)!;
+    for (let i = 0; i < surfaces.length; i++) {
+      if (depth.has(i)) continue;
+      if (canTraverse(surfaces[cur], surfaces[i])) {
+        depth.set(i, d + 1);
+        queue.push(i);
+      }
+    }
+  }
+  return depth;
+}
+
 /** Step 4: BFS over the jump graph. */
 function reachableSet(surfaces: Surface[], startIdx: number): Set<number> {
   const seen = new Set<number>([startIdx]);
@@ -549,6 +582,20 @@ function placeTunnel(
       if (Math.abs(cx - spawnX) < 160) continue;
       if (Math.abs(cx - goalX) < 160) continue;
       if (solids.some((r) => rectsOverlap(box, r))) continue;
+      /**
+       * A pipe is entered by standing on its lip, so the lip needs room above
+       * it. Checking only the pipe's own footprint places pipes under shelves
+       * with less clearance than the player is tall — visible, solid, and
+       * impossible to use.
+       */
+      const lipRoom: Rect = {
+        x: box.x,
+        y: box.y - PLAYER_H - 12,
+        w: TUNNEL_W,
+        h: PLAYER_H + 12,
+      };
+      if (box.y - PLAYER_H - 12 < 0) continue;
+      if (solids.some((r) => rectsOverlap(lipRoom, r))) continue;
       return {
         id: "tunnel",
         label: "service duct",
@@ -560,6 +607,339 @@ function placeTunnel(
     }
   }
   return null;
+}
+
+
+/**
+ * How much of a journey a candidate finish represents.
+ *
+ * Hop count alone is a poor difficulty measure, and photographs are exactly
+ * where it breaks down: a desk or a floor spans the whole frame, so every
+ * object resting on it is one jump from the spawn and the graph is a star with
+ * no depth. Judging by hops there would rate "walk two paces right and step up"
+ * the same as "cross the room and climb the shelves".
+ *
+ * So challenge combines all three things that actually make a route feel like
+ * one: how many jumps it takes, how far across the frame it goes, and how much
+ * height it gains — the last two measured in units that mean something, frame
+ * fractions and jump heights, so they can be added without arbitrary weights.
+ */
+function routeChallenge(
+  s: Surface,
+  hops: number,
+  spawnX: number,
+  spawnY: number,
+): number {
+  const cx = (s.x1 + s.x2) / 2;
+  const span = Math.abs(cx - spawnX) / WORLD_W;
+  const climb = Math.max(0, spawnY - s.y) / JUMP_HEIGHT;
+  return hops + climb + span * 2.5;
+}
+
+/** Below this, the finish is close enough that there was no level. */
+const MIN_CHALLENGE = 2.4;
+/**
+ * ...and however hard the climb, a finish this close to the start still reads
+ * as "no level". Distance gets a hard floor rather than a term in a sum,
+ * because a sum lets a tall climb next to the spawn out-score a proper journey,
+ * and the complaint being fixed here is specifically about proximity.
+ */
+const MIN_SPAN_FRACTION = 0.35;
+
+/**
+ * Pick where the goal belongs.
+ *
+ * The model is often a poor judge of this: it will put the flag a step from the
+ * spawn, or floating over a part of the scene nothing connects to. Repairing
+ * that afterwards patches a bad choice instead of making a good one.
+ *
+ * So the goal is *chosen* from the set already proved reachable, maximising
+ * challenge. Reachability becomes true by construction rather than by repair,
+ * and the finish lands as far into the scene as the photo allows.
+ */
+function chooseGoalSurface(
+  surfaces: Surface[],
+  depths: Map<number, number>,
+  spawnIdx: number,
+  spawnX: number,
+  spawnY: number,
+  /** Rescue paths must not propose somewhere the player cannot get to. */
+  reachableOnly = false,
+): { idx: number; hops: number; challenge: number; x: number } | null {
+  // Depth of the deepest reachable surface, used to score surfaces the player
+  // cannot yet get to. They are not disqualified: the bridge builder exists to
+  // connect exactly those, and restricting the choice to what is already
+  // reachable is what was making finishes land a few paces from the spawn while
+  // most of the scene went unused.
+  let maxDepth = 0;
+  for (const d of depths.values()) maxDepth = Math.max(maxDepth, d);
+
+  const consider = (requireSpan: boolean, reachableOnly: boolean) => {
+    let best: { idx: number; hops: number; challenge: number; x: number } | null = null;
+    for (let idx = 0; idx < surfaces.length; idx++) {
+      const known = depths.get(idx);
+      if (reachableOnly && known === undefined) continue;
+      const hops = known ?? maxDepth + 1;
+      const s = surfaces[idx];
+      // The spawn surface is allowed, but only its far end: on a photograph the
+      // desk or floor usually spans the frame, and "walk the length of it" is a
+      // real route that excluding the surface outright throws away.
+      if (idx === spawnIdx) {
+        const far = Math.abs(s.x2 - spawnX) > Math.abs(s.x1 - spawnX) ? s.x2 : s.x1;
+        if (Math.abs(far - spawnX) / WORLD_W < MIN_SPAN_FRACTION) continue;
+      }
+      if (s.x2 - s.x1 < PLAYER_W * 1.6) continue; // too narrow to finish on
+      const cx =
+        idx === spawnIdx
+          ? Math.abs(s.x2 - spawnX) > Math.abs(s.x1 - spawnX)
+            ? s.x2 - PLAYER_W
+            : s.x1 + PLAYER_W
+          : (s.x1 + s.x2) / 2;
+      if (requireSpan && Math.abs(cx - spawnX) / WORLD_W < MIN_SPAN_FRACTION) {
+        continue;
+      }
+      const challenge = routeChallenge(
+        { ...s, x1: cx - PLAYER_W, x2: cx + PLAYER_W },
+        hops,
+        spawnX,
+        spawnY,
+      );
+      if (!best || challenge > best.challenge) {
+        best = { idx, hops, challenge, x: cx };
+      }
+    }
+    return best;
+  };
+  // Prefer a finish genuinely across the scene, bridging to it if need be; then
+  // relax the distance requirement; and only then settle for somewhere already
+  // reachable. The caller re-proves the level and falls back if bridging fails.
+  if (reachableOnly) return consider(true, true) ?? consider(false, true);
+  return consider(true, false) ?? consider(false, false) ?? consider(false, true);
+}
+
+
+/**
+ * Build a route where the scene does not provide one.
+ *
+ * `bridgeToward` extends the reachable region one hop at a time and gives up
+ * when it cannot find a good next step — which is the common case in a photo
+ * with no floor, where the objects are islands with nothing between them. When
+ * it gives up, the goal gets rescued back to somewhere near the spawn, and the
+ * level is over before it starts.
+ *
+ * This lays a deliberate staircase from the spawn to a chosen destination:
+ * steps sized to the real jump arc, skipped where the scene already provides
+ * footing, and never placed over a hazard. Unlike bridging it cannot fail to
+ * make progress, because each step is placed at a fixed reachable offset from
+ * the last rather than searched for.
+ */
+function forceRoute(
+  entities: Entity[],
+  fromX: number,
+  fromY: number,
+  targetX: number,
+  targetY: number,
+): Entity[] {
+  const W = 120;
+  const H = 18;
+  /**
+   * The horizontal step must exceed the platform width.
+   *
+   * At 150 wide and 115 apart, consecutive steps overlapped by 35px with only
+   * 69px of headroom between them — so the player stood on one step directly
+   * underneath the next, with nowhere to jump. The staircase was geometrically
+   * a shaft. Keeping the stride longer than the tread guarantees every step is
+   * reached through open air.
+   */
+  const STEP_X = Math.max(W + 30, JUMP_RANGE * 0.55);
+  const STEP_Y = JUMP_HEIGHT * 0.55;
+
+  const solids: Rect[] = entities
+    .filter((e) => MATERIAL_SPECS[e.material].solid)
+    .map((e) => toWorld(e.box));
+  const hazards: Rect[] = entities
+    .filter((e) => e.material === "hazard")
+    .map((e) => toWorld(e.box));
+
+  const added: Entity[] = [];
+  let cx = fromX;
+  let cy = fromY;
+  const dir = targetX >= cx ? 1 : -1;
+
+  /**
+   * What is at a candidate step position.
+   *
+   * Three outcomes, and the middle one matters most: if the scene already has
+   * something solid there, the route should *use* it and carry on from its top
+   * rather than treat it as an obstacle. Earlier this returned "blocked", so a
+   * staircase crossing a shelf simply stopped.
+   */
+  type Spot =
+    | { kind: "place"; box: Rect }
+    | { kind: "existing"; top: number }
+    | null;
+
+  const inspect = (x: number, y: number): Spot => {
+    const box: Rect = { x: x - W / 2, y, w: W, h: H };
+    if (box.x < 0 || box.x + W > WORLD_W) return null;
+
+    // Touching a hazard, or jumping through one, is fatal — never route here.
+    const arc: Rect = {
+      x: box.x,
+      y: y - JUMP_HEIGHT - PLAYER_H,
+      w: W,
+      h: JUMP_HEIGHT + PLAYER_H,
+    };
+    if (hazards.some((r) => rectsOverlap(box, r) || rectsOverlap(arc, r))) {
+      return null;
+    }
+
+    const hit = solids.find((r) => rectsOverlap(box, r));
+    if (hit) return { kind: "existing", top: hit.y };
+
+    // Room to stand and launch. Not a full jump height: demanding that makes
+    // most positions unusable, and a skipped step breaks the chain.
+    const headroom: Rect = { x: box.x, y: y - PLAYER_H - 30, w: W, h: PLAYER_H + 30 };
+    if (solids.some((r) => rectsOverlap(headroom, r))) return null;
+    return { kind: "place", box };
+  };
+
+  for (let i = 0; i < 20; i++) {
+    const dx = targetX - cx;
+    const dy = targetY - cy;
+    if (Math.abs(dx) < STEP_X && Math.abs(dy) < STEP_Y) break;
+
+    let nx = cx + dir * Math.min(Math.abs(dx), STEP_X);
+    let ny = cy + Math.max(-STEP_Y, Math.min(STEP_Y, dy));
+    nx = Math.max(W / 2, Math.min(WORLD_W - W / 2, nx));
+    ny = Math.max(JUMP_HEIGHT + PLAYER_H, Math.min(WORLD_H - H, ny));
+
+    // Nudge along and around the step to find somewhere workable.
+    let spot: Spot = null;
+    let placedX = nx;
+    outer: for (const dyOff of [0, -46, 46]) {
+      for (const dxOff of [0, 70, -70, 140, -140]) {
+        const tryX = nx + dxOff;
+        const tryY = ny + dyOff;
+
+        /**
+         * Reject a step the player could only just make.
+         *
+         * Nudging around an obstacle can stretch a stride: one route came out
+         * with a 170px gap against a 178px maximum, which the reachability
+         * proof accepts and no human lands. Every step is held to three
+         * quarters of the arc, so the route is comfortable rather than
+         * technically possible.
+         */
+        const gap = Math.abs(tryX - cx) - W;
+        const reachHere = jumpReach(cy - tryY);
+        if (reachHere < 0 || gap > reachHere * 0.75) continue;
+
+        const s2 = inspect(tryX, tryY);
+        if (s2) {
+          spot = s2;
+          placedX = tryX;
+          ny = tryY;
+          break outer;
+        }
+      }
+    }
+    // Nowhere workable within reach: stop rather than jump the gap, because
+    // advancing anyway leaves a hole no later step can span.
+    if (!spot) break;
+
+    if (spot.kind === "existing") {
+      // Step onto what the scene already provides and continue from its top.
+      cx = placedX;
+      cy = spot.top;
+      continue;
+    }
+
+    added.push({
+      id: `route-${added.length}`,
+      label: "stepping stone",
+      material: "solid",
+      reason: "placed so the scene has a route through it",
+      box: toNorm(spot.box),
+      synthetic: true,
+    });
+    solids.push(spot.box);
+    cx = placedX;
+    cy = ny;
+  }
+
+  return added;
+}
+
+
+/** A level with fewer coins than this has nothing to collect. */
+const MIN_COINS = 9;
+const COIN_SIZE = 32;
+
+/**
+ * Scatter coins along the route.
+ *
+ * The model decides what is a "collectible", and it is stingy about it — a
+ * photograph of a desk usually yields one, sometimes none. Since coins are what
+ * unlock characters, that leaves the whole progression inert on exactly the
+ * levels the project is about.
+ *
+ * Coins are placed a jump above reachable surfaces, so every one is worth going
+ * for and none is decoration. Ids are derived from position, which keeps them
+ * stable across reloads — the progress ledger pays each coin once and needs the
+ * same coin to have the same name next time.
+ */
+function placeCoins(
+  entities: Entity[],
+  surfaces: Surface[],
+  reach: Set<number>,
+  existing: number,
+  spawnX: number,
+  spawnY: number,
+): Entity[] {
+  const want = MIN_COINS - existing;
+  if (want <= 0) return [];
+
+  const occupied: Rect[] = entities.map((e) => toWorld(e.box));
+  const added: Entity[] = [];
+
+  // Widest surfaces first: they hold the most coins without crowding.
+  const ordered = [...reach]
+    .map((i) => surfaces[i])
+    .sort((a, b) => b.x2 - b.x1 - (a.x2 - a.x1));
+
+  // Two passes at different heights, so a surface can carry more than one coin
+  // without them sitting on top of each other.
+  for (const height of [58, 108]) {
+    for (const s of ordered) {
+      if (added.length >= want) break;
+      const slots = Math.max(1, Math.floor((s.x2 - s.x1) / 190));
+      for (let k = 0; k < slots && added.length < want; k++) {
+        const cx = s.x1 + ((k + 0.5) * (s.x2 - s.x1)) / slots;
+        const box: Rect = {
+          x: cx - COIN_SIZE / 2,
+          y: s.y - height,
+          w: COIN_SIZE,
+          h: COIN_SIZE,
+        };
+        if (box.y < 8) continue;
+        // Not on the doorstep: a coin the player collects by existing is not a
+        // reward, and it makes the counter tick before they have done anything.
+        if (Math.hypot(cx - spawnX, box.y - spawnY) < 150) continue;
+        if (occupied.some((r) => rectsOverlap(box, r))) continue;
+        occupied.push(box);
+        added.push({
+          id: `coin-${Math.round(box.x)}-${Math.round(box.y)}`,
+          label: "loose coin",
+          material: "collectible",
+          reason: "small, portable and worth grabbing",
+          box: toNorm(box),
+          synthetic: true,
+        });
+      }
+    }
+  }
+  return added;
 }
 
 /**
@@ -578,10 +958,10 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
   spawn.y = Math.min(0.9, Math.max(0.05, spawn.y));
   goal.x = Math.min(0.96, Math.max(0.04, goal.x));
   goal.y = Math.min(0.92, Math.max(0.04, goal.y));
-  if (Math.hypot(goal.x - spawn.x, goal.y - spawn.y) < 0.25) {
-    goal.x = spawn.x > 0.5 ? 0.1 : 0.9;
-    repairs.push("Moved the goal — it was spawn-adjacent, so there was no level.");
-  }
+  // Deliberately no spawn-adjacency check here: the spawn is still the model's
+  // raw guess and gets snapped onto a real surface further down, so anything
+  // measured against it now is measured against a position nobody starts from.
+  // Goal placement happens after that snap instead.
 
   let surfaces = buildSurfaces(entities);
   if (surfaces.length === 0) {
@@ -660,6 +1040,92 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
   };
 
   let reach = reachableSet(surfaces, spawnIdx);
+  /** Set once the goal sits on a real surface, so later passes leave it alone. */
+  let goalChosen = false;
+
+  /**
+   * Decide whether the model's goal is good enough to keep.
+   *
+   * It is kept only if it is reachable, far enough across the frame, and at
+   * least MIN_GOAL_HOPS jumps away. Otherwise the goal is moved to the surface
+   * with the longest route to it. This is the fix for three separate ways a
+   * generated level could be no fun: a goal beside the spawn, a goal nothing
+   * connects to, and a goal you reach by walking in a straight line.
+   */
+  {
+    const depths = reachableDepths(surfaces, spawnIdx);
+    const spawnPx = spawn.x * WORLD_W;
+    const spawnPy = spawn.y * WORLD_H;
+
+    // How many jumps the model's own goal would take, if it is reachable.
+    let modelHops = Infinity;
+    if (goalReachable(surfaces, reach, goalX, goalY)) {
+      const pad: Surface = {
+        x1: goalX - PLAYER_W,
+        x2: goalX + PLAYER_W,
+        y: goalY,
+        material: "solid",
+      };
+      for (const [idx, d] of depths) {
+        if (canTraverse(surfaces[idx], pad)) modelHops = Math.min(modelHops, d + 1);
+      }
+    }
+    const modelChallenge =
+      modelHops === Infinity
+        ? -1
+        : routeChallenge(
+            { x1: goalX - PLAYER_W, x2: goalX + PLAYER_W, y: goalY, material: "solid" },
+            modelHops,
+            spawnPx,
+            spawnPy,
+          );
+    const modelSpanFrac = Math.abs(goalX - spawnPx) / WORLD_W;
+    const modelOk =
+      modelChallenge >= MIN_CHALLENGE && modelSpanFrac >= MIN_SPAN_FRACTION;
+
+    if (!modelOk) {
+      const picked = chooseGoalSurface(surfaces, depths, spawnIdx, spawnPx, spawnPy);
+      // Only move the goal if the alternative is genuinely better. Relocating
+      // to something duller than the model's own choice is a regression.
+      if (picked && picked.challenge > modelChallenge) {
+        const s2 = surfaces[picked.idx];
+        goalX = Math.max(s2.x1 + PLAYER_W, Math.min(s2.x2 - PLAYER_W, picked.x));
+        goalY = s2.y - 8;
+        goal = { x: goalX / WORLD_W, y: goalY / WORLD_H };
+        repairs.push(
+          modelHops === Infinity
+            ? `Moved the goal onto a surface the player can actually get to (${picked.hops} jumps away).`
+            : `Moved the goal further out — the model put it ${modelHops} jump${modelHops === 1 ? "" : "s"} from the start (now ${picked.hops}).`,
+        );
+        if (picked.challenge < MIN_CHALLENGE) {
+          repairs.push(
+            "This scene has no long route in it; the finish is closer than ideal.",
+          );
+        }
+        ensureGoalSupport();
+        // Lay the route at the same moment the goal is chosen. Deferring this
+        // to the bridge pass leaves a window where the goal is far but
+        // unreachable, and every later repair resolves that by dragging the
+        // goal back toward the spawn — which is the bug, not the fix.
+        surfaces = buildSurfaces(entities);
+        spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
+        reach = reachableSet(surfaces, spawnIdx);
+        if (!goalReachable(surfaces, reach, goalX, goalY)) {
+          const stones = forceRoute(entities, spawnPx, spawnPy, goalX, goalY);
+          if (stones.length) {
+            entities = [...entities, ...stones];
+            surfaces = buildSurfaces(entities);
+            spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
+            reach = reachableSet(surfaces, spawnIdx);
+            repairs.push(
+              `Laid ${stones.length} stepping stones so the finish is actually a journey.`,
+            );
+          }
+        }
+        goalChosen = true;
+      }
+    }
+  }
 
   /**
    * Cap how far the goal can float above the scene.
@@ -673,7 +1139,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
    * to do what it is good at — spanning a gap or two.
    */
   const MAX_CLIMB = JUMP_HEIGHT * 2.2;
-  {
+  if (!goalChosen) {
     let highest = Infinity;
     let highestSurface: Surface | null = null;
     for (const i of reach) {
@@ -777,7 +1243,117 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
     repairs.push("Relocated the goal onto a verified-reachable surface.");
   }
 
-  const ok = goalReachable(surfaces, reach, goalX, goalY);
+  /**
+   * If the goal is still cut off, build a route to it rather than retreating.
+   *
+   * The old behaviour here was to relocate the goal onto whatever the player
+   * could already reach, which reliably produced the exact complaint this pass
+   * exists to fix: a finish a few paces from the start, with most of the scene
+   * unused. Moving the goal is now the last resort, not the first.
+   */
+  if (!goalReachable(surfaces, reach, goalX, goalY)) {
+    const stones = forceRoute(
+      entities,
+      spawn.x * WORLD_W,
+      spawn.y * WORLD_H,
+      goalX,
+      goalY,
+    );
+    if (stones.length) {
+      entities = [...entities, ...stones];
+      surfaces = buildSurfaces(entities);
+      spawnIdx = nearestSurfaceIndex(
+        surfaces,
+        spawn.x * WORLD_W,
+        spawn.y * WORLD_H,
+      );
+      reach = reachableSet(surfaces, spawnIdx);
+      repairs.push(
+        `Built a ${stones.length}-step route to the finish rather than moving it closer.`,
+      );
+    }
+  }
+
+
+  /**
+   * Last guarantee: a level whose finish sits beside its start is not a level.
+   *
+   * Everything above tries to work with the scene as photographed. If the scene
+   * genuinely offers no route — islands with no floor between them, which is
+   * what a photo of a desk against a wall usually is — then one is built.
+   */
+  {
+    const spawnPx = spawn.x * WORLD_W;
+    const spawnPy = spawn.y * WORLD_H;
+    if (Math.abs(goalX - spawnPx) / WORLD_W < MIN_SPAN_FRACTION) {
+      // Aim at the widest surface far enough away, or failing that, at open
+      // space near the opposite edge.
+      let target: { x: number; y: number } | null = null;
+      let bestScore = -1;
+      for (const s2 of surfaces) {
+        const cx = (s2.x1 + s2.x2) / 2;
+        const spanFrac = Math.abs(cx - spawnPx) / WORLD_W;
+        if (spanFrac < MIN_SPAN_FRACTION) continue;
+        if (s2.x2 - s2.x1 < PLAYER_W * 1.6) continue;
+        const score = spanFrac * 2 + Math.max(0, spawnPy - s2.y) / JUMP_HEIGHT;
+        if (score > bestScore) {
+          bestScore = score;
+          target = { x: cx, y: s2.y - 8 };
+        }
+      }
+      if (!target) {
+        const far = spawnPx < WORLD_W / 2 ? WORLD_W * 0.86 : WORLD_W * 0.14;
+        target = { x: far, y: Math.max(90, spawnPy - JUMP_HEIGHT * 1.4) };
+      }
+
+      const stones = forceRoute(entities, spawnPx, spawnPy, target.x, target.y);
+      if (stones.length) {
+        entities = [...entities, ...stones];
+        surfaces = buildSurfaces(entities);
+        repairs.push(
+          `Built a ${stones.length}-step route — the scene had nothing between the start and anywhere worth finishing.`,
+        );
+      }
+      goalX = target.x;
+      goalY = target.y;
+      goal = { x: goalX / WORLD_W, y: goalY / WORLD_H };
+      ensureGoalSupport();
+      surfaces = buildSurfaces(entities);
+      spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
+      reach = reachableSet(surfaces, spawnIdx);
+
+      // Because this pass runs last, it is also the last chance to connect what
+      // it just moved. The staircase above covers open ground; bridging closes
+      // whatever the scene's own geometry leaves.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (goalReachable(surfaces, reach, goalX, goalY)) break;
+        const bridge = bridgeToward(surfaces, reach, goalX, goalY, solidRects());
+        if (!bridge) break;
+        entities = [...entities, bridge];
+        surfaces = buildSurfaces(entities);
+        spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
+        reach = reachableSet(surfaces, spawnIdx);
+      }
+    }
+  }
+
+  // --- coins ------------------------------------------------------------
+  {
+    const already = entities.filter((e) => e.material === "collectible").length;
+    const coins = placeCoins(
+      entities,
+      surfaces,
+      reach,
+      already,
+      spawn.x * WORLD_W,
+      spawn.y * WORLD_H,
+    );
+    if (coins.length) {
+      entities = [...entities, ...coins];
+      // Coins are not solid, so this cannot affect the completability proof.
+      repairs.push(`Scattered ${coins.length} coins along the route.`);
+    }
+  }
 
   // --- inhabitants ------------------------------------------------------
   const spawnIdxFinal = nearestSurfaceIndex(
@@ -828,12 +1404,30 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
     }
   }
 
+  // Final route measurement, taken against the level as it will actually be
+  // played rather than against any intermediate state.
+  const finalDepths = reachableDepths(surfaces, spawnIdxFinal);
+  const goalPad: Surface = {
+    x1: goalX - PLAYER_W,
+    x2: goalX + PLAYER_W,
+    y: goalY,
+    material: "solid",
+  };
+  let hops = 0;
+  for (const [idx, d] of finalDepths) {
+    if (canTraverse(surfaces[idx], goalPad)) {
+      hops = hops === 0 ? d + 1 : Math.min(hops, d + 1);
+    }
+  }
+
   return {
     level: { ...raw, entities, spawn, goal, repairs, monsters },
     report: {
-      ok,
+      ok: goalReachable(surfaces, reach, goalX, goalY),
       repairs,
       surfaces: surfaces.length,
+      hops,
+      span: Math.abs(goalX - spawn.x * WORLD_W) / WORLD_W,
       coverage: surfaces.length ? reach.size / surfaces.length : 1,
     },
   };

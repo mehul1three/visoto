@@ -6,7 +6,7 @@ Paste-ready. Trim to taste — do not pad it.
 
 ## Project name
 
-**Playground**
+**Visoto**
 
 ## Tagline (Devpost "elevator pitch", 200 char max)
 

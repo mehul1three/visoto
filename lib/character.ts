@@ -20,11 +20,15 @@ export type CharacterKind =
   | "slime";
 
 /**
- * `cost` is the coin total at which a character unlocks. The three built-in
- * scenes hold nine coins between them and pay a two-coin bonus each, so a
- * player who fully clears everything shipped lands on fifteen — exactly enough
- * to open the last character. Nothing is locked behind a photo upload, but
- * uploading is by far the fastest way to get there.
+ * `cost` is the coin total at which a character unlocks.
+ *
+ * Priced against what the shipped content actually yields: nine coins per scene
+ * plus a two-coin clear bonus, so fully finishing all three built-ins lands on
+ * thirty-three — enough for the first three characters. The last two are
+ * deliberately out of reach of the demo scenes alone, because every uploaded
+ * photo brings roughly sixteen more (nine on the level, two for clearing it,
+ * five down the pipe). The expensive end of the list is a reason to point the
+ * camera at something new, which is the whole point of the project.
  */
 export const CHARACTERS: Array<{
   kind: CharacterKind;
@@ -33,11 +37,11 @@ export const CHARACTERS: Array<{
   blurb: string;
 }> = [
   { kind: "blob", name: "Blob", cost: 0, blurb: "The default. Dependable, rectangular." },
-  { kind: "ball", name: "Bean", cost: 2, blurb: "Rounder. Reads its own arc more clearly." },
-  { kind: "ghost", name: "Spook", cost: 5, blurb: "Hem drifts as you move." },
-  { kind: "robot", name: "Unit", cost: 8, blurb: "Visor instead of eyes. Antenna optional." },
-  { kind: "cat", name: "Cat", cost: 11, blurb: "Ears, whiskers, and no sense of danger." },
-  { kind: "slime", name: "Slime", cost: 15, blurb: "Squat, wet, and faintly pleased." },
+  { kind: "ball", name: "Bean", cost: 8, blurb: "Rounder. Reads its own arc more clearly." },
+  { kind: "ghost", name: "Spook", cost: 18, blurb: "Hem drifts as you move." },
+  { kind: "robot", name: "Unit", cost: 32, blurb: "Visor instead of eyes. Antenna optional." },
+  { kind: "cat", name: "Cat", cost: 50, blurb: "Ears, whiskers, and no sense of danger." },
+  { kind: "slime", name: "Slime", cost: 72, blurb: "Squat, wet, and faintly pleased." },
 ];
 
 export const PLAYER_COLORS = [

@@ -40,7 +40,7 @@ import {
   levelIdOf,
 } from "@/lib/progress";
 
-type Phase = "ready" | "playing" | "paused" | "won";
+type Phase = "ready" | "playing" | "paused" | "dead" | "won";
 
 export interface GameHandleState {
   title: string;
@@ -138,6 +138,8 @@ export default function Game({
     seconds: 0,
   });
   const [tip, setTip] = useState<{ e: Entity; x: number; y: number } | null>(null);
+  /** What killed the player, shown on the retry screen. */
+  const [cause, setCause] = useState<string>("fell");
 
   // Mirrors, so the animation loop can read current values without restarting.
   const phaseRef = useRef(phase);
@@ -184,6 +186,14 @@ export default function Game({
   const start = useCallback(() => {
     unlockAudio();
     resetCoinStreak();
+    setPhase("playing");
+  }, []);
+
+  const retry = useCallback(() => {
+    worldRef.current.restartRun();
+    particlesRef.current = [];
+    resetCoinStreak();
+    inputRef.current = { ...NO_INPUT };
     setPhase("playing");
   }, []);
 
@@ -279,10 +289,13 @@ export default function Game({
       }
       if (
         (e.code === "Space" || e.code === "Enter") &&
-        (phaseRef.current === "ready" || phaseRef.current === "won")
+        (phaseRef.current === "ready" ||
+          phaseRef.current === "won" ||
+          phaseRef.current === "dead")
       ) {
-        if (phaseRef.current === "won") restart();
-        else start();
+        if (phaseRef.current === "ready") start();
+        else if (phaseRef.current === "dead") retry();
+        else restart();
         e.preventDefault();
         return;
       }
@@ -314,6 +327,7 @@ export default function Game({
     };
   }, [
     restart,
+    retry,
     start,
     togglePause,
     toggleFullscreen,
@@ -396,6 +410,8 @@ export default function Game({
             burst(ev.x! + PLAYER_W / 2, ev.y! + PLAYER_H / 2, "#fb7185", 18, 260);
             shake(11);
             sfx("death");
+            setCause(ev.cause ?? "fell");
+            setPhase("dead");
             break;
           case "win": {
             burst(ev.x! + PLAYER_W / 2, ev.y! + PLAYER_H / 2, "#38bdf8", 26, 300);
@@ -738,6 +754,37 @@ export default function Game({
             </Overlay>
           )}
 
+          {phase === "dead" && !showSettings && !showDashboard && (
+            <Overlay>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-rose-300">
+                {cause === "fell"
+                  ? "You fell"
+                  : cause === "monster"
+                    ? "Caught"
+                    : "Ouch"}
+              </p>
+              <h2 className="mt-2 max-w-md text-center text-2xl font-semibold text-white">
+                {cause === "fell"
+                  ? "Off the edge of the world."
+                  : cause === "monster"
+                    ? "Something was patrolling there."
+                    : `The ${cause} got you.`}
+              </h2>
+              <p className="mt-2 text-sm text-neutral-400">
+                {hud.deaths} fall{hud.deaths === 1 ? "" : "s"} so far
+              </p>
+              <button
+                onClick={retry}
+                className="mt-6 rounded-lg bg-white px-7 py-2.5 text-sm font-semibold text-black transition hover:bg-neutral-200"
+              >
+                Try again
+              </button>
+              <p className="mt-3 text-xs text-neutral-500">
+                or press <Kbd>space</Kbd> · the clock restarts
+              </p>
+            </Overlay>
+          )}
+
           {phase === "won" && !showSettings && !showDashboard && (
             <Overlay>
               <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-300">
@@ -862,7 +909,7 @@ export default function Game({
             <Kbd>↑</Kbd> climb
           </span>
           <span className="flex items-center gap-1">
-            <Kbd>↓</Kbd> enter pipe
+            <span className="text-pink-300">pipes</span> drop you in
           </span>
           <span className="flex items-center gap-1">
             <Kbd>esc</Kbd> pause
@@ -906,7 +953,7 @@ function ControlLegend() {
         <Kbd>↑</Kbd> climb
       </span>
       <span className="flex items-center gap-1">
-        <Kbd>↓</Kbd> enter pipe
+        <span className="text-pink-300">pipes</span> drop you in
       </span>
       <span className="flex items-center gap-1">
         <Kbd>x</Kbd> x-ray
@@ -1046,6 +1093,16 @@ function draw(
   ctx.fillRect(0, 0, WORLD_W, WORLD_H);
 
   ctx.save();
+  /**
+   * Upward camera follow, matching the 3D renderer.
+   *
+   * The canvas maps the world 1:1, so a player who jumps above y = 0 simply
+   * leaves the picture. They can: standing on the highest platform still leaves
+   * a full jump of headroom above the world. Pan only when they would otherwise
+   * be lost, and never downward — there is nothing under the world to show.
+   */
+  const lift = Math.max(0, PLAYER_H * 2.2 - (w.player.y + PLAYER_H / 2));
+  if (lift > 0) ctx.translate(0, lift);
   if (shake > 0) {
     ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
   }
