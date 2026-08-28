@@ -176,8 +176,80 @@ function gapBetween(a: Surface, b: Surface): number {
   return a.x2 < b.x1 ? b.x1 - a.x2 : a.x1 - b.x2;
 }
 
-/** Can the player get from surface `a` to surface `b` in one move? */
-function canTraverse(a: Surface, b: Surface): boolean {
+/** Points sampled along one jump arc, for the hazard check below. */
+const ARC_SAMPLES = 10;
+
+/**
+ * Does the flight path from `a` to `b` pass through a hazard?
+ *
+ * `canTraverse` used to answer only "can the player physically cover this
+ * distance", which meant a route straight through an open flame counted as
+ * reachable — the proof was satisfied by a jump that kills whoever takes it.
+ * This walks the same parabola the physics engine would actually fly, in
+ * world units, and rejects it if the player's box would touch a hazard
+ * anywhere along the way, not merely at takeoff and landing.
+ *
+ * When the two surfaces overlap in x (a short hop up or down rather than a
+ * horizontal jump), the arc collapses to a vertical line between them at the
+ * midpoint of the overlap — there is no meaningful horizontal component to
+ * simulate, but a hazard sitting in that column is exactly as fatal.
+ */
+function arcClearOfHazards(
+  a: Surface,
+  b: Surface,
+  launch: number,
+  hazards: Rect[],
+): boolean {
+  if (hazards.length === 0) return true;
+
+  const overlapStart = Math.max(a.x1, b.x1);
+  const overlapEnd = Math.min(a.x2, b.x2);
+  const overlapping = overlapEnd >= overlapStart;
+
+  let takeoffX: number;
+  let landingX: number;
+  let dir: 1 | -1;
+  if (overlapping) {
+    takeoffX = landingX = (overlapStart + overlapEnd) / 2;
+    dir = 1;
+  } else if (a.x2 <= b.x1) {
+    takeoffX = a.x2;
+    landingX = b.x1;
+    dir = 1;
+  } else {
+    takeoffX = a.x1;
+    landingX = b.x2;
+    dir = -1;
+  }
+
+  const dist = Math.abs(landingX - takeoffX);
+  const tTotal = overlapping ? 0 : dist / MOVE_SPEED;
+
+  for (let i = 0; i <= ARC_SAMPLES; i++) {
+    const frac = i / ARC_SAMPLES;
+    let x: number;
+    let feetY: number;
+    if (overlapping) {
+      x = takeoffX;
+      feetY = a.y + (b.y - a.y) * frac;
+    } else {
+      const t = tTotal * frac;
+      x = takeoffX + dir * MOVE_SPEED * t;
+      feetY = a.y - (launch * t - 0.5 * GRAVITY * t * t);
+    }
+    const box: Rect = {
+      x: x - PLAYER_W / 2,
+      y: feetY - PLAYER_H,
+      w: PLAYER_W,
+      h: PLAYER_H,
+    };
+    if (hazards.some((h) => rectsOverlap(box, h))) return false;
+  }
+  return true;
+}
+
+/** Can the player get from surface `a` to surface `b` in one move, alive? */
+function canTraverse(a: Surface, b: Surface, hazards: Rect[]): boolean {
   const rise = a.y - b.y; // positive => b is higher
   const launch = a.material === "bouncy" ? JUMP_V * BOUNCE_MULT : JUMP_V;
   const maxRise =
@@ -185,7 +257,15 @@ function canTraverse(a: Surface, b: Surface): boolean {
   if (rise > maxRise) return false;
   const reach = jumpReach(rise, launch);
   if (reach < 0) return false;
-  return gapBetween(a, b) <= reach;
+  if (gapBetween(a, b) > reach) return false;
+  return arcClearOfHazards(a, b, launch, hazards);
+}
+
+/** Rects of every hazard in the scene, for the arc check above. */
+function hazardRectsOf(entities: Entity[]): Rect[] {
+  return entities
+    .filter((e) => e.material === "hazard")
+    .map((e) => toWorld(e.box));
 }
 
 function nearestSurfaceIndex(surfaces: Surface[], x: number, y: number): number {
@@ -344,6 +424,7 @@ function chooseSpawn(
 export function reachableDepths(
   surfaces: Surface[],
   startIdx: number,
+  hazards: Rect[] = [],
 ): Map<number, number> {
   const depth = new Map<number, number>([[startIdx, 0]]);
   const queue = [startIdx];
@@ -352,7 +433,7 @@ export function reachableDepths(
     const d = depth.get(cur)!;
     for (let i = 0; i < surfaces.length; i++) {
       if (depth.has(i)) continue;
-      if (canTraverse(surfaces[cur], surfaces[i])) {
+      if (canTraverse(surfaces[cur], surfaces[i], hazards)) {
         depth.set(i, d + 1);
         queue.push(i);
       }
@@ -362,14 +443,18 @@ export function reachableDepths(
 }
 
 /** Step 4: BFS over the jump graph. */
-function reachableSet(surfaces: Surface[], startIdx: number): Set<number> {
+function reachableSet(
+  surfaces: Surface[],
+  startIdx: number,
+  hazards: Rect[] = [],
+): Set<number> {
   const seen = new Set<number>([startIdx]);
   const queue = [startIdx];
   while (queue.length) {
     const cur = queue.shift()!;
     for (let i = 0; i < surfaces.length; i++) {
       if (seen.has(i)) continue;
-      if (canTraverse(surfaces[cur], surfaces[i])) {
+      if (canTraverse(surfaces[cur], surfaces[i], hazards)) {
         seen.add(i);
         queue.push(i);
       }
@@ -383,6 +468,7 @@ function goalReachable(
   reach: Set<number>,
   goalX: number,
   goalY: number,
+  hazards: Rect[] = [],
 ): boolean {
   // The goal is a point in space; treat it as a one-player-wide landing pad.
   const pad: Surface = {
@@ -392,7 +478,7 @@ function goalReachable(
     material: "solid",
   };
   for (const i of reach) {
-    if (canTraverse(surfaces[i], pad)) return true;
+    if (canTraverse(surfaces[i], pad, hazards)) return true;
   }
   return false;
 }
@@ -430,6 +516,7 @@ function bridgeToward(
   goalX: number,
   goalY: number,
   solids: Rect[],
+  hazards: Rect[],
 ): Entity | null {
   let from: Surface | null = null;
   let bestD = Infinity;
@@ -486,8 +573,11 @@ function bridgeToward(
       );
       const candidate: Surface = { x1: px, x2: px + W, y, material: "solid" };
 
-      // Must be a jump the player can actually make...
+      // Must be a jump the player can actually make, and not one that flies
+      // through a hazard to get there — a bridge is worthless if the only way
+      // to reach it is through fire.
       if (gapBetween(from, candidate) > reachAt) continue;
+      if (!arcClearOfHazards(from, candidate, launch, hazards)) continue;
 
       /**
        * Two-sided clearance, which is the invariant every inserted platform has
@@ -942,6 +1032,56 @@ function placeCoins(
   return added;
 }
 
+
+/**
+ * Land the goal on whichever reachable surface is furthest from the spawn,
+ * breaking ties toward a roomier landing.
+ *
+ * Used as a fallback once every attempt to build or bridge a route has been
+ * exhausted. It never fails to find *something*, because `reach` always
+ * contains at least the spawn surface itself — the level ends up short rather
+ * than unplayable, which is the correct trade when the alternative is a goal
+ * nothing can reach.
+ */
+function relocateGoalToReachable(
+  surfaces: Surface[],
+  reach: Set<number>,
+  spawnPx: number,
+  solids: Rect[],
+  hazards: Rect[],
+): { x: number; y: number } | null {
+  /**
+   * `clearRun` only checks headroom against solids, never against hazards —
+   * standing on the ground is never blocked by fire, so a surface can score as
+   * perfectly "clear" while the air ten pixels above it is a hazard. Landing
+   * the goal there satisfies every earlier check and is still fatal to reach.
+   * Scored candidates are tried best-first and skipped if the exact landing
+   * box would sit inside a hazard.
+   */
+  const candidates = [...reach]
+    .map((i) => {
+      const spanFrac =
+        Math.abs((surfaces[i].x1 + surfaces[i].x2) / 2 - spawnPx) / WORLD_W;
+      const { span, centre } = clearRun(surfaces[i], solids);
+      return { i, score: spanFrac * 1000 + span, centre };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  for (const c of candidates) {
+    const target = surfaces[c.i];
+    const y = target.y - 10;
+    const landing: Rect = {
+      x: c.centre - PLAYER_W / 2,
+      y: y - PLAYER_H,
+      w: PLAYER_W,
+      h: PLAYER_H,
+    };
+    if (hazards.some((h) => rectsOverlap(landing, h))) continue;
+    return { x: c.centre, y };
+  }
+  return null;
+}
+
 /**
  * Validate and repair a raw level. Always returns a playable level — the report
  * says how much surgery that took, and the UI shows it rather than hiding it.
@@ -949,6 +1089,9 @@ function placeCoins(
 export function solve(raw: Level): { level: Level; report: SolveReport } {
   const repairs: string[] = [];
   let entities = sanitise(raw.entities, repairs);
+  // Computed once: nothing solve() does adds or removes a hazard afterwards,
+  // only solid/tunnel/collectible entities are ever appended.
+  const hazards = hazardRectsOf(entities);
 
   let spawn = { ...raw.spawn };
   let goal = { ...raw.goal };
@@ -1039,7 +1182,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
     y: (surfaces[spawnIdx].y - 6) / WORLD_H,
   };
 
-  let reach = reachableSet(surfaces, spawnIdx);
+  let reach = reachableSet(surfaces, spawnIdx, hazards);
   /** Set once the goal sits on a real surface, so later passes leave it alone. */
   let goalChosen = false;
 
@@ -1053,13 +1196,13 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
    * connects to, and a goal you reach by walking in a straight line.
    */
   {
-    const depths = reachableDepths(surfaces, spawnIdx);
+    const depths = reachableDepths(surfaces, spawnIdx, hazards);
     const spawnPx = spawn.x * WORLD_W;
     const spawnPy = spawn.y * WORLD_H;
 
     // How many jumps the model's own goal would take, if it is reachable.
     let modelHops = Infinity;
-    if (goalReachable(surfaces, reach, goalX, goalY)) {
+    if (goalReachable(surfaces, reach, goalX, goalY, hazards)) {
       const pad: Surface = {
         x1: goalX - PLAYER_W,
         x2: goalX + PLAYER_W,
@@ -1067,7 +1210,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
         material: "solid",
       };
       for (const [idx, d] of depths) {
-        if (canTraverse(surfaces[idx], pad)) modelHops = Math.min(modelHops, d + 1);
+        if (canTraverse(surfaces[idx], pad, hazards)) modelHops = Math.min(modelHops, d + 1);
       }
     }
     const modelChallenge =
@@ -1109,14 +1252,14 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
         // goal back toward the spawn — which is the bug, not the fix.
         surfaces = buildSurfaces(entities);
         spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
-        reach = reachableSet(surfaces, spawnIdx);
-        if (!goalReachable(surfaces, reach, goalX, goalY)) {
+        reach = reachableSet(surfaces, spawnIdx, hazards);
+        if (!goalReachable(surfaces, reach, goalX, goalY, hazards)) {
           const stones = forceRoute(entities, spawnPx, spawnPy, goalX, goalY);
           if (stones.length) {
             entities = [...entities, ...stones];
             surfaces = buildSurfaces(entities);
             spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
-            reach = reachableSet(surfaces, spawnIdx);
+            reach = reachableSet(surfaces, spawnIdx, hazards);
             repairs.push(
               `Laid ${stones.length} stepping stones so the finish is actually a journey.`,
             );
@@ -1165,15 +1308,15 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
         spawn.x * WORLD_W,
         spawn.y * WORLD_H,
       );
-      reach = reachableSet(surfaces, spawnIdx);
+      reach = reachableSet(surfaces, spawnIdx, hazards);
     }
   }
 
   let bridges = 0;
 
   for (let attempt = 0; attempt < 16; attempt++) {
-    if (goalReachable(surfaces, reach, goalX, goalY)) break;
-    const bridge = bridgeToward(surfaces, reach, goalX, goalY, solidRects());
+    if (goalReachable(surfaces, reach, goalX, goalY, hazards)) break;
+    const bridge = bridgeToward(surfaces, reach, goalX, goalY, solidRects(), hazards);
     if (!bridge) break;
     // Never drop a bridge on top of a hazard - that would "fix" the level into
     // an instant death.
@@ -1190,7 +1333,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
     entities.push(bridge);
     surfaces = buildSurfaces(entities);
     spawnIdx = nearestSurfaceIndex(surfaces, spawn.x * WORLD_W, spawn.y * WORLD_H);
-    reach = reachableSet(surfaces, spawnIdx);
+    reach = reachableSet(surfaces, spawnIdx, hazards);
     bridges++;
   }
 
@@ -1222,9 +1365,9 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
     x: finalSpawn.x / WORLD_W,
     y: (surfaces[spawnIdx].y - 6) / WORLD_H,
   };
-  reach = reachableSet(surfaces, spawnIdx);
+  reach = reachableSet(surfaces, spawnIdx, hazards);
 
-  if (!goalReachable(surfaces, reach, goalX, goalY)) {
+  if (!goalReachable(surfaces, reach, goalX, goalY, hazards)) {
     let bestIdx = spawnIdx;
     let bestSpan = -1;
     for (const i of reach) {
@@ -1251,7 +1394,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
    * exists to fix: a finish a few paces from the start, with most of the scene
    * unused. Moving the goal is now the last resort, not the first.
    */
-  if (!goalReachable(surfaces, reach, goalX, goalY)) {
+  if (!goalReachable(surfaces, reach, goalX, goalY, hazards)) {
     const stones = forceRoute(
       entities,
       spawn.x * WORLD_W,
@@ -1267,7 +1410,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
         spawn.x * WORLD_W,
         spawn.y * WORLD_H,
       );
-      reach = reachableSet(surfaces, spawnIdx);
+      reach = reachableSet(surfaces, spawnIdx, hazards);
       repairs.push(
         `Built a ${stones.length}-step route to the finish rather than moving it closer.`,
       );
@@ -1320,19 +1463,41 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
       ensureGoalSupport();
       surfaces = buildSurfaces(entities);
       spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
-      reach = reachableSet(surfaces, spawnIdx);
+      reach = reachableSet(surfaces, spawnIdx, hazards);
 
       // Because this pass runs last, it is also the last chance to connect what
       // it just moved. The staircase above covers open ground; bridging closes
       // whatever the scene's own geometry leaves.
       for (let attempt = 0; attempt < 10; attempt++) {
-        if (goalReachable(surfaces, reach, goalX, goalY)) break;
-        const bridge = bridgeToward(surfaces, reach, goalX, goalY, solidRects());
+        if (goalReachable(surfaces, reach, goalX, goalY, hazards)) break;
+        const bridge = bridgeToward(surfaces, reach, goalX, goalY, solidRects(), hazards);
         if (!bridge) break;
         entities = [...entities, bridge];
         surfaces = buildSurfaces(entities);
         spawnIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
-        reach = reachableSet(surfaces, spawnIdx);
+        reach = reachableSet(surfaces, spawnIdx, hazards);
+      }
+
+      /**
+       * This pass has no fallback of its own once bridging stalls — and
+       * hazard-aware bridging stalls more often than the old version, because
+       * more candidate steps are correctly rejected as flying through fire.
+       * Every earlier stage in solve() has a next resort; this one used to
+       * have none, so a level could leave here with an ambitiously distant
+       * but completely unreachable goal. Ambition loses to correctness: fall
+       * back to the furthest surface actually proven reachable rather than
+       * strand the goal where nothing above it in reach can land.
+       */
+      if (!goalReachable(surfaces, reach, goalX, goalY, hazards)) {
+        const rescued = relocateGoalToReachable(surfaces, reach, spawnPx, solidRects(), hazards);
+        if (rescued) {
+          goalX = rescued.x;
+          goalY = rescued.y;
+          goal = { x: goalX / WORLD_W, y: goalY / WORLD_H };
+          repairs.push(
+            "The far route could not be fully connected; settled for the furthest surface actually reachable.",
+          );
+        }
       }
     }
   }
@@ -1353,6 +1518,43 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
       // Coins are not solid, so this cannot affect the completability proof.
       repairs.push(`Scattered ${coins.length} coins along the route.`);
     }
+  }
+
+  /**
+   * Absolute final guarantee: whatever path got here, the goal must be
+   * reachable from this exact spawn before anything else runs.
+   *
+   * Every stage above tries its own repair and its own fallback, but each one
+   * only sees its own slice of the pipeline — a rescue three stages up can
+   * relocate the goal onto a surface that was reachable from a spawn the
+   * pipeline has since moved away from, and nothing downstream re-checks it.
+   * Chasing each such gap individually does not converge; asserting the
+   * invariant once, at the end, does. If this still finds a problem, it is the
+   * same last-resort rescue everything else already falls back to.
+   */
+  {
+    const spawnPx = spawn.x * WORLD_W;
+    const spawnPy = spawn.y * WORLD_H;
+    const finalIdx = nearestSurfaceIndex(surfaces, spawnPx, spawnPy);
+    const finalReach = reachableSet(surfaces, finalIdx, hazards);
+    if (!goalReachable(surfaces, finalReach, goalX, goalY, hazards)) {
+      const rescued = relocateGoalToReachable(
+        surfaces,
+        finalReach,
+        spawnPx,
+        solidRects(),
+        hazards,
+      );
+      if (rescued) {
+        goalX = rescued.x;
+        goalY = rescued.y;
+        goal = { x: goalX / WORLD_W, y: goalY / WORLD_H };
+        repairs.push(
+          "Final check found the goal still unreachable; moved it to the furthest surface actually reachable.",
+        );
+      }
+    }
+    reach = finalReach;
   }
 
   // --- inhabitants ------------------------------------------------------
@@ -1389,13 +1591,14 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
       spawn.x * WORLD_W,
       spawn.y * WORLD_H,
     );
-    const trialReach = reachableSet(trialSurfaces, trialIdx);
+    const trialReach = reachableSet(trialSurfaces, trialIdx, hazards);
     if (
       goalReachable(
         trialSurfaces,
         trialReach,
         goal.x * WORLD_W,
         goal.y * WORLD_H,
+        hazards,
       )
     ) {
       entities = trial;
@@ -1406,7 +1609,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
 
   // Final route measurement, taken against the level as it will actually be
   // played rather than against any intermediate state.
-  const finalDepths = reachableDepths(surfaces, spawnIdxFinal);
+  const finalDepths = reachableDepths(surfaces, spawnIdxFinal, hazards);
   const goalPad: Surface = {
     x1: goalX - PLAYER_W,
     x2: goalX + PLAYER_W,
@@ -1415,7 +1618,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
   };
   let hops = 0;
   for (const [idx, d] of finalDepths) {
-    if (canTraverse(surfaces[idx], goalPad)) {
+    if (canTraverse(surfaces[idx], goalPad, hazards)) {
       hops = hops === 0 ? d + 1 : Math.min(hops, d + 1);
     }
   }
@@ -1423,7 +1626,7 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
   return {
     level: { ...raw, entities, spawn, goal, repairs, monsters },
     report: {
-      ok: goalReachable(surfaces, reach, goalX, goalY),
+      ok: goalReachable(surfaces, reach, goalX, goalY, hazards),
       repairs,
       surfaces: surfaces.length,
       hops,
