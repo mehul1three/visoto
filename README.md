@@ -31,8 +31,9 @@ Every object carries the reason it was classified that way, and the UI shows it
 on hover. The reason is not decoration — it is the claim the system is making,
 put where you can check it.
 
-Seven materials: solid, bouncy, hazard, climbable, crumbling, slippery,
-collectible.
+Eight materials: solid, bouncy, hazard, climbable, crumbling, slippery,
+collectible, tunnel — pipes that drop you into a bonus chamber built from the
+same scene (see below).
 
 ---
 
@@ -79,6 +80,11 @@ solver had already certified:
 - **Goals hanging in space.** A goal with nothing under it can only be collected
   by clipping it at the peak of a jump — a precision demand the level never
   advertised. Goals get a landing.
+- **Jumps that fly through fire.** Reachability originally checked only
+  distance and height between two surfaces — a jump that physically covers the
+  gap counted as valid even if the arc passed straight through a hazard. The
+  solver now simulates the actual parabola the physics engine would fly and
+  rejects any jump a hazard sits inside of, not merely ones that land on one.
 
 Every repair is reported in the UI rather than hidden. If the solver had to
 rebuild your level, you get told.
@@ -101,7 +107,16 @@ Levels open on a Ready screen rather than dropping you in mid-air, pausing
 freezes the clock as well as the physics, and settings persist across sessions:
 sound, particles, screen shake, and whether object labels stay visible during
 play. Particles and shake default to off when the system asks for reduced
-motion.
+motion. Dying opens a retry screen naming what killed you and resets the
+clock — the one number that survives a retry on purpose is the fall count,
+since a fresh zero would hide how many attempts a level actually took.
+
+Patrolling monsters guard the route Mario-style: touching one from the side
+kills you, landing on top stomps it. Walking onto a pipe (no key needed —
+arrival alone triggers it) drops you into a bonus chamber built from the same
+scene, stuffed with coins and only escapable by climbing back up to a second
+pipe. The chamber is hand-authored rather than generated, precisely because it
+never passes through the solver's completability proof.
 
 Three built-in scenes ship with the app — a desk, a living room and a washroom —
 so it is playable with no key and no photo at all. Each is hand-authored rather
@@ -109,17 +124,25 @@ than model-generated, so its geometry is exact, and each is still run through
 `solve()` on load like any uploaded photo. They are illustrations, not
 photographs, and the UI says so rather than implying the model produced them.
 
-Characters unlock with coins: nine sit on every level plus two for clearing it,
-and five more wait down each pipe. Fully finishing the three built-in scenes
-reaches the first three characters; the last two are priced beyond what the
-demo scenes can pay, because a fresh photograph is worth about sixteen coins and
-pointing the camera at something new is the behaviour worth rewarding.
+Characters unlock with coins, spent from a ledger that pays each individual
+coin exactly once, ever — restarting a level to farm the same coin repeatedly
+earns nothing, on purpose.
+
+| Character | Blob | Bean | Spook | Unit | Cat | Slime |
+|---|---|---|---|---|---|---|
+| Cost (coins) | 0 | 8 | 18 | 32 | 50 | 72 |
+
+Every level carries nine coins plus a two-coin bonus for clearing it, and a
+bonus chamber (above) holds twenty-one more. The three built-in scenes alone —
+no photo, no key — total 33 coins, enough to unlock the first four characters;
+Cat and Slime need coins from a bonus chamber or an uploaded photo, because a
+fresh photograph is worth roughly sixteen coins and pointing the camera at
+something new is the behaviour worth rewarding.
 
 Six characters — Blob, Bean, Spook, Unit, Cat, Slime — in eight colours, all
 drawn procedurally, so no sprite sheets ship and a new character costs one
-function. The picker in Settings previews each one using the very same
-`drawCharacter` the game calls, so a swatch cannot drift from what actually
-appears on screen.
+function. The picker previews each one using the very same `drawCharacter` the
+game calls, so a swatch cannot drift from what actually appears on screen.
 
 Every character occupies an identical collision box, and that is a correctness
 requirement rather than a shortcut: the solver proves each level completable
@@ -164,19 +187,24 @@ npm install
 npm run dev
 ```
 
-The app is fully playable with no configuration — the built-in scene is
-hand-authored and needs no API access. To analyse your own photos, add a key:
+The app is fully playable with no configuration — the three built-in scenes
+are hand-authored and need no API access. To analyse your own photos, add a
+key:
 
 ```bash
 echo 'GEMINI_API_KEY=...' >> .env.local
 ```
 
 A key is free from [AI Studio](https://aistudio.google.com/apikey) and needs no
-billing account. A photo takes about 13 seconds end to end.
+billing account. A photo takes roughly 10–20 seconds end to end, depending on
+model load.
 
-The route tries `gemini-3.5-flash` first and falls back to `gemini-2.5-flash` if
-the primary model is overloaded, because a demo should not be one capacity spike
-away from failing. Override the primary with `GEMINI_MODEL`.
+The route tries `gemini-3.5-flash`, then `gemini-3.6-flash`, then
+`gemini-3.5-flash-lite`, because a demo should not be one capacity spike away
+from failing. The whole chain shares a single time budget rather than giving
+each attempt its own — a client that gives up before a slow-but-working
+request finishes is a worse failure than a slightly longer wait. Override the
+primary model with `GEMINI_MODEL`.
 
 Verify that every level is actually completable:
 
@@ -217,4 +245,7 @@ boxes as `[ymin, xmin, ymax, xmax]` and points as `[y, x]`, normalised to
 translate into the engine's own layout produced visibly worse boxes. The
 conversion happens once, at the boundary, in `lib/normalise.ts`.
 
-Photos are cropped in your browser, sent once, and never stored.
+Photos are cropped in your browser, then sent to Google's Gemini API for
+analysis. This project's own server never stores them — but they do reach
+Google, which is a fact worth stating plainly rather than leaving a reader to
+assume "never stored" means "never sent anywhere."
