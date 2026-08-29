@@ -85,9 +85,12 @@ solver had already certified:
   gap counted as valid even if the arc passed straight through a hazard. The
   solver now simulates the actual parabola the physics engine would fly and
   rejects any jump a hazard sits inside of, not merely ones that land on one.
+  See [ADR 0007](docs/adr/0007-reachability-must-simulate-the-arc-not-just-the-endpoints.md).
 
 Every repair is reported in the UI rather than hidden. If the solver had to
-rebuild your level, you get told.
+rebuild your level, you get told. The reasoning behind decisions like these —
+including the ones that turned out wrong before they were fixed — is kept in
+[`docs/adr`](docs/adr).
 
 ---
 
@@ -116,7 +119,8 @@ kills you, landing on top stomps it. Walking onto a pipe (no key needed —
 arrival alone triggers it) drops you into a bonus chamber built from the same
 scene, stuffed with coins and only escapable by climbing back up to a second
 pipe. The chamber is hand-authored rather than generated, precisely because it
-never passes through the solver's completability proof.
+never passes through the solver's completability proof — see
+[ADR 0006](docs/adr/0006-bonus-chambers-are-hand-authored.md).
 
 Three built-in scenes ship with the app — a desk, a living room and a washroom —
 so it is playable with no key and no photo at all. Each is hand-authored rather
@@ -126,7 +130,8 @@ photographs, and the UI says so rather than implying the model produced them.
 
 Characters unlock with coins, spent from a ledger that pays each individual
 coin exactly once, ever — restarting a level to farm the same coin repeatedly
-earns nothing, on purpose.
+earns nothing, on purpose (see
+[ADR 0005](docs/adr/0005-coins-pay-once-per-entity.md)).
 
 | Character | Blob | Bean | Spook | Unit | Cat | Slime |
 |---|---|---|---|---|---|---|
@@ -148,7 +153,8 @@ Every character occupies an identical collision box, and that is a correctness
 requirement rather than a shortcut: the solver proves each level completable
 using the player's exact width, height and jump arc, so a character that was
 taller or wider would silently invalidate every proof the app makes. Skins
-change how the player looks and nothing else.
+change how the player looks and nothing else — details in
+[ADR 0004](docs/adr/0004-characters-share-one-hitbox.md).
 
 Full screen tries the Fullscreen API first and falls back to filling the
 viewport with CSS, so the control still works in embedded contexts where the
@@ -157,6 +163,20 @@ API is refused — a dead button is worse than either.
 Sound effects are synthesised from oscillators at runtime, so there are no audio
 files in the repo. The coin pitch climbs with each one collected in a row, which
 is most of what makes collecting them feel good.
+
+## Diorama mode
+
+A WebGL renderer extrudes every detected object out of the photo into a
+lit, shadowed slab standing in space, with a camera that drifts toward the
+player. It is a *view* of the same 2D simulation the flat canvas renders — the
+player, monsters and every collision still live on one plane, because the
+completability proof is a 2D jump-arc model and a player free to move in depth
+would invalidate it. See
+[ADR 0003](docs/adr/0003-gameplay-stays-2d-rendering-can-be-3d.md).
+
+Renderers are swappable at runtime through one small interface
+(`lib/renderer.ts`), and if WebGL fails to initialise the game falls back to
+the flat canvas automatically — a dead renderer is worse than a plain one.
 
 ## Press X
 
@@ -203,8 +223,9 @@ The route tries `gemini-3.5-flash`, then `gemini-3.6-flash`, then
 `gemini-3.5-flash-lite`, because a demo should not be one capacity spike away
 from failing. The whole chain shares a single time budget rather than giving
 each attempt its own — a client that gives up before a slow-but-working
-request finishes is a worse failure than a slightly longer wait. Override the
-primary model with `GEMINI_MODEL`.
+request finishes is a worse failure than a slightly longer wait; see
+[ADR 0008](docs/adr/0008-shared-timeout-budget-across-the-model-chain.md).
+Override the primary model with `GEMINI_MODEL`.
 
 Verify that every level is actually completable:
 
@@ -222,28 +243,38 @@ two disagree, the bots are right.
 
 | | |
 |---|---|
-| `lib/level.ts` | Level format, the seven materials, and the JSON Schema handed to the model — kept in one file so schema and types cannot drift |
-| `lib/physics.ts` | Fixed-timestep AABB platformer. Coyote time, jump buffering, variable jump height |
-| `lib/solver.ts` | Validation, the reachability proof, and the repair passes |
+| `lib/level.ts` | Level format, the eight materials, and the JSON Schema handed to the model — kept in one file so schema and types cannot drift |
+| `lib/physics.ts` | Fixed-timestep AABB platformer. Coyote time, jump buffering, variable jump height, monster AI, stomp resolution |
+| `lib/solver.ts` | Validation, the hazard-aware reachability proof, and every repair pass — the largest file in the project, and the one with an [ADR](docs/adr) behind nearly every non-obvious line |
+| `lib/normalise.ts` | Translates Gemini's native `box_2d`/`[y, x]` output into the engine's own coordinate format, and distrusts every field on the way in |
+| `lib/renderer.ts` | The interface both renderers implement, so they're swappable at runtime |
+| `lib/render3d.ts` | The WebGL diorama — same 2D simulation, extruded and lit |
+| `lib/bonus.ts` | The hand-authored bonus chamber behind every pipe |
+| `lib/progress.ts` | The pay-once coin ledger and character-unlock state |
 | `lib/export.ts` | Godot and Phaser exporters |
 | `lib/audio.ts` | Procedural sound effects — oscillators, no asset files |
 | `lib/character.ts` | Six player characters, drawn on canvas; identical hitboxes |
 | `lib/settings.ts` | Player settings, persisted to localStorage |
 | `lib/image.ts` | Client-side 16:9 crop, so normalised boxes map to the world exactly |
+| `lib/samples.ts` | The three hand-authored built-in scenes |
 | `app/api/analyze` | The one model call: image in, structured level out |
-| `scripts/verify.ts` | Completability harness |
+| `scripts/verify.ts` | Completability harness, including a bot swarm and a suite of hostile/randomised model outputs |
+| `docs/adr` | Why the load-bearing decisions above were made, including the ones that turned out wrong before they were fixed |
 
 Next.js 16, TypeScript, Tailwind, and `gemini-3.5-flash` with a structured-output
-schema. No game engine — the physics is about 300 lines, because the solver has
-to be able to reason about it exactly.
+schema. No game engine — the physics is under 500 lines, because the solver has
+to be able to reason about it exactly (see
+[ADR 0001](docs/adr/0001-prove-completability-before-play.md)).
 
 The model is the most swappable part of the project: exactly one file
-(`app/api/analyze/route.ts`) knows which provider is in use, and the other ~2,900
-lines do not. The schema is written in Gemini's native spatial conventions —
-boxes as `[ymin, xmin, ymax, xmax]` and points as `[y, x]`, normalised to
-0-1000 — because that is what the model is trained to emit; asking it to
-translate into the engine's own layout produced visibly worse boxes. The
-conversion happens once, at the boundary, in `lib/normalise.ts`.
+(`app/api/analyze/route.ts`) knows which provider is in use, and the rest of
+`lib/` does not — see
+[ADR 0002](docs/adr/0002-vision-provider-isolated-to-one-file.md). The schema
+is written in Gemini's native spatial conventions — boxes as
+`[ymin, xmin, ymax, xmax]` and points as `[y, x]`, normalised to 0-1000 —
+because that is what the model is trained to emit; asking it to translate
+into the engine's own layout produced visibly worse boxes. The conversion
+happens once, at the boundary, in `lib/normalise.ts`.
 
 Photos are cropped in your browser, then sent to Google's Gemini API for
 analysis. This project's own server never stores them — but they do reach
