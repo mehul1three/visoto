@@ -2,6 +2,9 @@
 
 **Your room is the level.**
 
+**[Play it live →](https://playground-kohl-nine.vercel.app)** — no install, no
+key required. The built-in scenes work the moment the page loads.
+
 Photograph anything. Ten seconds later a character is running along your
 keyboard, bouncing off your pillow and dodging your coffee — because the coffee
 is hot, and the system knows what hot coffee does to you.
