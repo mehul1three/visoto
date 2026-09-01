@@ -579,6 +579,42 @@ export default function Game({
   const overlayOpen = phase !== "playing" || showSettings || showDashboard;
   const big = fullscreen || maximised;
 
+  /**
+   * Photos come from a phone; the game has always required a keyboard. That
+   * mismatch means the entire "point your camera at your room, then play"
+   * story only works if you also happen to have arrow keys nearby — usually
+   * meaning a second device. Detected once, on mount, rather than tracked live:
+   * a device that starts without touch isn't going to grow a touchscreen
+   * mid-session, and re-checking on every render would just be waste.
+   */
+  const [isTouchDevice] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      ("ontouchstart" in window || navigator.maxTouchPoints > 0),
+  );
+
+  /**
+   * Press and release for one on-screen control, mirroring exactly what the
+   * keyboard handler does to the same `inputRef` — same shared object, same
+   * boolean flip. The physics loop reads `inputRef.current` once a tick and
+   * has no idea whether a flag came from a key or a finger, so touch and
+   * keyboard combine for free with no extra plumbing.
+   */
+  const pressTouch = useCallback(
+    (key: keyof Input) => (e: React.PointerEvent) => {
+      e.preventDefault();
+      inputRef.current[key] = true;
+    },
+    [],
+  );
+  const releaseTouch = useCallback(
+    (key: keyof Input) => (e: React.PointerEvent) => {
+      e.preventDefault();
+      inputRef.current[key] = false;
+    },
+    [],
+  );
+
   return (
     <div className="w-full">
       <div
@@ -646,6 +682,60 @@ export default function Game({
               <Stat label="time" value={`${hud.seconds.toFixed(1)}s`} />
             </div>
           </div>
+
+          {/* Touch controls: only while actually playing, and sitting above the
+              icon row rather than replacing it, since pause/settings/fullscreen
+              still need to be reachable by tap too. */}
+          {isTouchDevice && phase === "playing" && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-16 z-40 flex items-end justify-between px-3">
+              <div className="pointer-events-auto grid grid-cols-3 grid-rows-3 gap-1">
+                <div />
+                <TouchButton
+                  label="climb"
+                  onPress={pressTouch("up")}
+                  onRelease={releaseTouch("up")}
+                >
+                  <ArrowIcon dir="up" />
+                </TouchButton>
+                <div />
+                <TouchButton
+                  label="left"
+                  onPress={pressTouch("left")}
+                  onRelease={releaseTouch("left")}
+                >
+                  <ArrowIcon dir="left" />
+                </TouchButton>
+                <div />
+                <TouchButton
+                  label="right"
+                  onPress={pressTouch("right")}
+                  onRelease={releaseTouch("right")}
+                >
+                  <ArrowIcon dir="right" />
+                </TouchButton>
+                <div />
+                <TouchButton
+                  label="drop through a pipe"
+                  onPress={pressTouch("down")}
+                  onRelease={releaseTouch("down")}
+                >
+                  <ArrowIcon dir="down" />
+                </TouchButton>
+                <div />
+              </div>
+              <button
+                onPointerDown={pressTouch("jump")}
+                onPointerUp={releaseTouch("jump")}
+                onPointerLeave={releaseTouch("jump")}
+                onPointerCancel={releaseTouch("jump")}
+                aria-label="jump"
+                style={{ touchAction: "none" }}
+                className="pointer-events-auto grid h-16 w-16 select-none place-items-center rounded-full border border-white/15 bg-black/55 text-xs font-semibold uppercase tracking-wide text-neutral-200 backdrop-blur active:bg-white/20"
+              >
+                Jump
+              </button>
+            </div>
+          )}
 
           {/* In-canvas controls, above the overlays: full screen and settings
               have to stay reachable from the Ready and Paused screens too. */}
@@ -999,6 +1089,45 @@ function Toggle({
         <span className="block text-xs leading-snug text-neutral-500">{hint}</span>
       </span>
     </button>
+  );
+}
+
+function TouchButton({
+  label,
+  onPress,
+  onRelease,
+  children,
+}: {
+  label: string;
+  onPress: (e: React.PointerEvent) => void;
+  onRelease: (e: React.PointerEvent) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onPointerDown={onPress}
+      onPointerUp={onRelease}
+      onPointerLeave={onRelease}
+      onPointerCancel={onRelease}
+      aria-label={label}
+      style={{ touchAction: "none" }}
+      className="grid h-12 w-12 select-none place-items-center rounded-lg border border-white/15 bg-black/55 text-neutral-200 backdrop-blur active:bg-white/20"
+    >
+      {children}
+    </button>
+  );
+}
+
+function ArrowIcon({ dir }: { dir: "up" | "down" | "left" | "right" }) {
+  const rotation = { up: 0, right: 90, down: 180, left: 270 }[dir];
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-5 w-5 fill-current"
+      style={{ transform: `rotate(${rotation}deg)` }}
+    >
+      <path d="M8 2.5 13.5 12h-11z" />
+    </svg>
   );
 }
 
