@@ -21,6 +21,12 @@ import {
   subscribeProgress,
 } from "@/lib/progress";
 import { SolveReport, solve } from "@/lib/solver";
+import {
+  commitLastGenerated,
+  getLastGenerated,
+  getServerLastGenerated,
+  subscribeLastGenerated,
+} from "@/lib/lastGenerated";
 
 type Phase = "loading" | "analyzing" | "revealing" | "playing" | "error";
 
@@ -51,6 +57,12 @@ export default function Page() {
   // the analysis fails we still have a level for the old photo and none for the
   // new one, and showing the two together renders a level that does not exist.
   const [pendingImage, setPendingImage] = useState<HTMLImageElement | null>(null);
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null);
+  const lastGenerated = useSyncExternalStore(
+    subscribeLastGenerated,
+    getLastGenerated,
+    getServerLastGenerated,
+  );
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -112,6 +124,7 @@ export default function Page() {
       }
       const img = await loadImage(prepared.dataUrl);
       setPendingImage(img);
+      setPendingImageUrl(prepared.dataUrl);
       setPhase("analyzing");
 
       const res = await fetch("/api/analyze", {
@@ -127,6 +140,7 @@ export default function Page() {
       if (!res.ok) {
         setError(data?.message ?? `Analysis failed (${res.status}).`);
         setPendingImage(null);
+        setPendingImageUrl(null);
         setPhase("error");
         return;
       }
@@ -142,21 +156,55 @@ export default function Page() {
           : err.message,
       );
       setPendingImage(null);
+      setPendingImageUrl(null);
       setPhase("error");
     }
   }, []);
 
   const onRevealDone = useCallback(() => {
-    if (pending && pendingImage) {
+    if (pending && pendingImage && pendingReport) {
       setLevel(pending);
       setImage(pendingImage);
       setReport(pendingReport);
       setActiveSample(null);
       setLevelKey((k) => k + 1);
+      if (pendingImageUrl) {
+        commitLastGenerated({
+          level: pending,
+          report: pendingReport,
+          image: pendingImageUrl,
+          savedAt: Date.now(),
+        });
+      }
     }
     setPendingImage(null);
+    setPendingImageUrl(null);
     setPhase("playing");
-  }, [pending, pendingImage, pendingReport]);
+  }, [pending, pendingImage, pendingImageUrl, pendingReport]);
+
+  /** Restore the level a photo most recently became. Already solved, so this
+      is a pure state swap — no re-analysis, no network call. */
+  const continueLastGenerated = useCallback(async () => {
+    if (!lastGenerated) return;
+    try {
+      const img = await loadImage(lastGenerated.image);
+      setError(null);
+      setPending(null);
+      setImage(img);
+      setLevel(lastGenerated.level);
+      setReport(lastGenerated.report);
+      setActiveSample(null);
+      setLevelKey((k) => k + 1);
+      setPhase("playing");
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("error");
+    }
+  }, [lastGenerated]);
+
+  const dismissLastGenerated = useCallback(() => {
+    commitLastGenerated(null);
+  }, []);
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -271,6 +319,35 @@ export default function Page() {
                 </span>
               </span>
             </button>
+
+            {lastGenerated && level !== lastGenerated.level && (
+              <div className="rounded-xl border border-sky-400/25 bg-sky-400/[0.06] p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-widest text-sky-300">
+                    Continue where you left off
+                  </span>
+                  <button
+                    onClick={dismissLastGenerated}
+                    aria-label="Dismiss"
+                    className="shrink-0 text-neutral-500 transition hover:text-neutral-300"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <p className="mt-1.5 text-sm text-neutral-200">
+                  {lastGenerated.level.title}
+                </p>
+                <p className="mt-0.5 text-xs text-neutral-500">
+                  from your last photo
+                </p>
+                <button
+                  onClick={() => void continueLastGenerated()}
+                  className="mt-3 w-full rounded-lg border border-sky-400/40 bg-sky-400/10 px-3 py-2 text-sm font-medium text-sky-100 transition hover:bg-sky-400/20"
+                >
+                  Play it again
+                </button>
+              </div>
+            )}
 
             <Panel title="Source">
               <button
