@@ -16,6 +16,7 @@ import {
   Monster,
   PLAYER_H,
   PLAYER_W,
+  SHIELD_MS,
   StepEvent,
   World,
 } from "@/lib/physics";
@@ -49,6 +50,7 @@ export interface GameHandleState {
   deaths: number;
   won: boolean;
   seconds: number;
+  shielded: boolean;
 }
 
 interface Props {
@@ -62,6 +64,8 @@ interface Props {
   onDashboard: (open: boolean) => void;
   onState?: (s: GameHandleState) => void;
 }
+
+const SHIELD_SECONDS = SHIELD_MS / 1000;
 
 const KEY_MAP: Record<string, keyof Input> = {
   ArrowLeft: "left",
@@ -136,6 +140,7 @@ export default function Game({
     deaths: 0,
     won: false,
     seconds: 0,
+    shielded: true,
   });
   const [tip, setTip] = useState<{ e: Entity; x: number; y: number } | null>(null);
   /** What killed the player, shown on the retry screen. */
@@ -528,6 +533,7 @@ export default function Game({
           deaths: w.deaths,
           won: w.won,
           seconds: w.elapsed / 1000,
+          shielded: w.isShielded(),
         });
       }
     };
@@ -673,8 +679,18 @@ export default function Game({
 
           {/* HUD */}
           <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-3 text-xs">
-            <div className="truncate rounded-lg border border-white/10 bg-black/55 px-3 py-1.5 backdrop-blur">
-              <span className="font-semibold text-white">{hud.title}</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="truncate rounded-lg border border-white/10 bg-black/55 px-3 py-1.5 backdrop-blur">
+                <span className="font-semibold text-white">{hud.title}</span>
+              </div>
+              {hud.shielded && (
+                <div className="flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-400/40 bg-sky-400/15 px-2.5 py-1.5 text-sky-200 backdrop-blur">
+                  <ShieldIcon />
+                  <span className="font-mono">
+                    {Math.max(0, SHIELD_SECONDS - hud.seconds).toFixed(1)}s
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex shrink-0 gap-2">
               <Stat label="coins" value={`${hud.collected}/${hud.total}`} />
@@ -1178,6 +1194,11 @@ function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 const ico = "h-4 w-4 fill-current";
+const ShieldIcon = () => (
+  <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-current">
+    <path d="M8 1.5 13.5 3.6v3.7c0 3.4-2.3 6.2-5.5 7.2-3.2-1-5.5-3.8-5.5-7.2V3.6L8 1.5Z" />
+  </svg>
+);
 const PauseIcon = () => (
   <svg viewBox="0 0 16 16" className={ico}><rect x="4" y="3" width="3" height="10" rx="1" /><rect x="9" y="3" width="3" height="10" rx="1" /></svg>
 );
