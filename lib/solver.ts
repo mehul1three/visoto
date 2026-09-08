@@ -735,6 +735,13 @@ const MIN_CHALLENGE = 2.4;
  * and the complaint being fixed here is specifically about proximity.
  */
 const MIN_SPAN_FRACTION = 0.35;
+/**
+ * Start of the "rightmost area" the finish line is hardcoded into, as a
+ * fraction of the frame width. Not 1.0 — landing exactly on the edge leaves
+ * no room for a landing pad, and real photos often have clutter or crop
+ * artifacts right at the border.
+ */
+const RIGHTMOST_FRACTION = 0.72;
 
 /**
  * Pick where the goal belongs.
@@ -902,7 +909,18 @@ function forceRoute(
     let nx = cx + dir * Math.min(Math.abs(dx), STEP_X);
     let ny = cy + Math.max(-STEP_Y, Math.min(STEP_Y, dy));
     nx = Math.max(W / 2, Math.min(WORLD_W - W / 2, nx));
-    ny = Math.max(JUMP_HEIGHT + PLAYER_H, Math.min(WORLD_H - H, ny));
+    /**
+     * Keep stones off the very top edge, not off the whole top quarter.
+     *
+     * This used to floor at JUMP_HEIGHT + PLAYER_H (~186px), which reads like
+     * "leave room for a jump above the stone" but actually means "never place
+     * a stone in roughly the top quarter of the frame" — so a target that
+     * legitimately needed to climb into that region got every intermediate
+     * stone flattened to the floor value instead, and the route saved the
+     * entire real climb for one final, oversized hop. A small fixed margin
+     * gives a stone room to stand without blocking genuinely high targets.
+     */
+    ny = Math.max(PLAYER_H + 20, Math.min(WORLD_H - H, ny));
 
     // Nudge along and around the step to find somewhere workable.
     let spot: Spot = null;
@@ -1419,32 +1437,53 @@ export function solve(raw: Level): { level: Level; report: SolveReport } {
 
 
   /**
-   * Last guarantee: a level whose finish sits beside its start is not a level.
+   * The finish line is hardcoded to the rightmost part of the photographed
+   * scene — not merely "far from spawn" (which could be either edge,
+   * depending on where the model happened to place the spawn), and not
+   * merely a fallback for when the goal ends up too close. It runs
+   * unconditionally: if a chosen or model-supplied goal already sits in the
+   * rightmost band, this is a no-op; otherwise it overrides whatever an
+   * earlier pass picked, deliberately trading that pass's "best challenge"
+   * heuristic for something predictable — read left to right, the finish is
+   * always on the right.
    *
-   * Everything above tries to work with the scene as photographed. If the scene
-   * genuinely offers no route — islands with no floor between them, which is
-   * what a photo of a desk against a wall usually is — then one is built.
+   * Reuses the same staircase-building and bridging machinery every other
+   * repair in this file already relies on, so the hazard-awareness and
+   * headroom checks that machinery carries apply here too. Only the target
+   * region is different; the guarantee that the target is actually reachable
+   * is identical.
    */
   {
     const spawnPx = spawn.x * WORLD_W;
     const spawnPy = spawn.y * WORLD_H;
-    if (Math.abs(goalX - spawnPx) / WORLD_W < MIN_SPAN_FRACTION) {
-      // Aim at the widest surface far enough away, or failing that, at open
-      // space near the opposite edge.
+    if (goalX < WORLD_W * RIGHTMOST_FRACTION) {
+      // Prefer the rightmost surface that qualifies; break near-ties toward
+      // whichever also asks for a bit of climb, so the finish is not
+      // trivially at floor level when something better is just as far right.
+      //
+      // Also require real separation from spawn. Without it, a spawn the
+      // model placed (or clamped) into the rightmost band itself would pass
+      // "rightmost" while landing beside spawn — technically in the right
+      // region, but not a level. The rightmost requirement and the
+      // not-beside-spawn requirement both have to hold at once.
       let target: { x: number; y: number } | null = null;
       let bestScore = -1;
       for (const s2 of surfaces) {
         const cx = (s2.x1 + s2.x2) / 2;
-        const spanFrac = Math.abs(cx - spawnPx) / WORLD_W;
-        if (spanFrac < MIN_SPAN_FRACTION) continue;
+        if (cx < WORLD_W * RIGHTMOST_FRACTION) continue;
+        if (Math.abs(cx - spawnPx) / WORLD_W < MIN_SPAN_FRACTION) continue;
         if (s2.x2 - s2.x1 < PLAYER_W * 1.6) continue;
-        const score = spanFrac * 2 + Math.max(0, spawnPy - s2.y) / JUMP_HEIGHT;
+        const score = cx + Math.max(0, spawnPy - s2.y) * 0.3;
         if (score > bestScore) {
           bestScore = score;
           target = { x: cx, y: s2.y - 8 };
         }
       }
       if (!target) {
+        // Nothing both qualifies as rightmost and clears spawn — most often
+        // because spawn itself already sits out there. Fall back to whichever
+        // edge is actually far from spawn, rather than force a hollow "right"
+        // point with nothing under it.
         const far = spawnPx < WORLD_W / 2 ? WORLD_W * 0.86 : WORLD_W * 0.14;
         target = { x: far, y: Math.max(90, spawnPy - JUMP_HEIGHT * 1.4) };
       }

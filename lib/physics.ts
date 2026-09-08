@@ -27,6 +27,18 @@ export const PLAYER_H = 46;
 export const CRUMBLE_MS = 600;
 export const COYOTE_MS = 90;
 export const JUMP_BUFFER_MS = 120;
+/**
+ * How long a fresh run is immune to dying, in milliseconds of actual played
+ * time (this counts against `elapsed`, which only advances while the game
+ * loop is actually stepping — so time spent on the Ready screen or paused
+ * does not eat into it). Covers the one moment a level's own construction
+ * can genuinely be unfair: spawning within a monster's patrol radius, or a
+ * hazard placed close enough that there was no time to react before ever
+ * having agency. Only ever active once, at the start of a run — dying and
+ * respawning mid-run does not grant a fresh window, since `elapsed` is the
+ * run clock and keeps counting through a death.
+ */
+export const SHIELD_MS = 3000;
 export const MAX_FALL = 1400;
 export const FIXED_DT = 1 / 120;
 
@@ -419,12 +431,15 @@ export class World {
         p.vy = -STOMP_BOUNCE;
         this.stomped++;
         events.push({ type: "stomp", x: m.x + m.w / 2, y: m.y });
-      } else {
+      } else if (!this.isShielded()) {
         this.deaths++;
         events.push({ type: "death", x: p.x, y: p.y, cause: "monster" });
         this.reset(false);
         return events;
       }
+      // Shielded and not stomping: pass through harmlessly. Stomping stays
+      // on regardless of the shield — landing on a monster is a reward, not
+      // a risk, so there is nothing about it the shield needs to suppress.
     }
 
     // --- tunnels ----------------------------------------------------------
@@ -449,7 +464,7 @@ export class World {
     const hazard = this.bodies.find(
       (b) => b.entity.material === "hazard" && overlaps(rect, b),
     );
-    if (hazard || p.y > WORLD_H + 80) {
+    if ((hazard || p.y > WORLD_H + 80) && !this.isShielded()) {
       this.deaths++;
       events.push({
         type: "death",
@@ -468,6 +483,11 @@ export class World {
     }
 
     return events;
+  }
+
+  /** True for the first SHIELD_MS of actual played time in a run. */
+  isShielded(): boolean {
+    return this.elapsed < SHIELD_MS;
   }
 
   private groundBodyUnder(p: PlayerState, solids: Body[]): Body | undefined {

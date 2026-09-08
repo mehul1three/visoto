@@ -16,6 +16,7 @@ import {
   MONSTER_H,
   PLAYER_H,
   PLAYER_W,
+  SHIELD_MS,
   World,
   type StepEvent,
 } from "../lib/physics";
@@ -344,15 +345,61 @@ console.log("\nmechanics");
     checks.push(["stomped monster dies", !w.monsters[0].alive]);
     checks.push(["stomp bounces the player up", w.player.vy < 0]);
 
+    // The opening shield means a fresh World is briefly immune, so a fatality
+    // check has to run once the shield has actually lapsed, and the shield
+    // itself needs its own check that a fresh contact survives.
     const w2 = new World(level);
+    for (let i = 0; i < Math.ceil(SHIELD_MS / (1000 / 120)) + 5; i++) {
+      w2.step(NONE, 1000 / 120);
+    }
     const m2 = w2.monsters[0];
     // Walking into its side, rising rather than falling.
     w2.player.x = m2.x + 4;
     w2.player.y = m2.y + MONSTER_H - PLAYER_H;
     w2.player.vy = -50;
+    checks.push(["shield has lapsed by then", !w2.isShielded()]);
     const evs2 = w2.step(NONE, 1000 / 120);
     checks.push(["walking into one is fatal", evs2.some((e) => e.type === "death")]);
     checks.push(["monster survives a side hit", w2.monsters[0].alive]);
+
+    // A fresh run is shielded: the very same side contact, on an untouched
+    // World, must not kill.
+    const w2b = new World(level);
+    const m2b = w2b.monsters[0];
+    w2b.player.x = m2b.x + 4;
+    w2b.player.y = m2b.y + MONSTER_H - PLAYER_H;
+    w2b.player.vy = -50;
+    checks.push(["fresh run starts shielded", w2b.isShielded()]);
+    const shieldedEvs = w2b.step(NONE, 1000 / 120);
+    checks.push([
+      "shielded contact survives",
+      !shieldedEvs.some((e) => e.type === "death"),
+    ]);
+    checks.push(["shielded player is alive", w2b.deaths === 0]);
+
+    // The shield is a separate code path for hazards than for monsters —
+    // prove that one directly too, rather than infer it from the monster
+    // case. Uses the desk sample's actual coffee mug rather than a synthetic
+    // hazard, so this exercises the real geometry a player would hit.
+    const hazardBody = w2b.bodies.find((b) => b.entity.id === "mug")!;
+    w2b.player.x = hazardBody.x + hazardBody.w / 2 - PLAYER_W / 2;
+    w2b.player.y = hazardBody.y + hazardBody.h / 2 - PLAYER_H / 2;
+    const hazardEvsShielded = w2b.step(NONE, 1000 / 120);
+    checks.push([
+      "shielded hazard contact survives",
+      !hazardEvsShielded.some((e) => e.type === "death"),
+    ]);
+
+    for (let i = 0; i < Math.ceil(SHIELD_MS / (1000 / 120)) + 5; i++) {
+      w2b.step(NONE, 1000 / 120);
+    }
+    w2b.player.x = hazardBody.x + hazardBody.w / 2 - PLAYER_W / 2;
+    w2b.player.y = hazardBody.y + hazardBody.h / 2 - PLAYER_H / 2;
+    const hazardEvsUnshielded = w2b.step(NONE, 1000 / 120);
+    checks.push([
+      "unshielded hazard contact is fatal",
+      hazardEvsUnshielded.some((e) => e.type === "death"),
+    ]);
 
     // A death must put the whole patrol back, or a level could be cleared by
     // trading lives for enemies.
