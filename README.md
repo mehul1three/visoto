@@ -10,7 +10,6 @@ keyboard, bouncing off your pillow and dodging your coffee — because the coffe
 is hot, and the system knows what hot coffee does to you.
 
 ![the desk sample level](public/samples/desk.svg)
-
 ---
 
 ## The idea: semantic physics
